@@ -14,13 +14,15 @@
 #include "atom/browser/browser.h"
 #include "atom/browser/native_window_views.h"
 #include "atom/browser/unresponsive_suppressor.h"
-#include "base/callback.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/post_task.h"
 #include "base/threading/thread.h"
 #include "base/win/scoped_gdi_object.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/gfx/icon_util.h"
+#include "ui/gfx/image/image_skia.h"
 
 namespace atom {
 
@@ -38,18 +40,18 @@ struct CommonButtonID {
 CommonButtonID GetCommonID(const base::string16& button) {
   base::string16 lower = base::ToLowerASCII(button);
   if (lower == L"ok")
-    return { TDCBF_OK_BUTTON, IDOK };
+    return {TDCBF_OK_BUTTON, IDOK};
   else if (lower == L"yes")
-    return { TDCBF_YES_BUTTON, IDYES };
+    return {TDCBF_YES_BUTTON, IDYES};
   else if (lower == L"no")
-    return { TDCBF_NO_BUTTON, IDNO };
+    return {TDCBF_NO_BUTTON, IDNO};
   else if (lower == L"cancel")
-    return { TDCBF_CANCEL_BUTTON, IDCANCEL };
+    return {TDCBF_CANCEL_BUTTON, IDCANCEL};
   else if (lower == L"retry")
-    return { TDCBF_RETRY_BUTTON, IDRETRY };
+    return {TDCBF_RETRY_BUTTON, IDRETRY};
   else if (lower == L"close")
-    return { TDCBF_CLOSE_BUTTON, IDCLOSE };
-  return { -1, -1 };
+    return {TDCBF_CLOSE_BUTTON, IDCLOSE};
+  return {-1, -1};
 }
 
 // Determine whether the buttons are common buttons, if so map common ID
@@ -85,13 +87,13 @@ int ShowTaskDialogUTF16(NativeWindow* parent,
                         bool* checkbox_checked,
                         const gfx::ImageSkia& icon) {
   TASKDIALOG_FLAGS flags =
-      TDF_SIZE_TO_CONTENT |  // Show all content.
+      TDF_SIZE_TO_CONTENT |           // Show all content.
       TDF_ALLOW_DIALOG_CANCELLATION;  // Allow canceling the dialog.
 
-  TASKDIALOGCONFIG config = { 0 };
-  config.cbSize     = sizeof(config);
-  config.hInstance  = GetModuleHandle(NULL);
-  config.dwFlags    = flags;
+  TASKDIALOGCONFIG config = {0};
+  config.cbSize = sizeof(config);
+  config.hInstance = GetModuleHandle(NULL);
+  config.dwFlags = flags;
 
   if (parent) {
     config.hwndParent =
@@ -126,6 +128,8 @@ int ShowTaskDialogUTF16(NativeWindow* parent,
         break;
       case MESSAGE_BOX_TYPE_ERROR:
         config.pszMainIcon = TD_ERROR_ICON;
+        break;
+      case MESSAGE_BOX_TYPE_NONE:
         break;
     }
   }
@@ -215,29 +219,29 @@ void RunMessageBoxInNewThread(base::Thread* thread,
                               const std::string& checkbox_label,
                               bool checkbox_checked,
                               const gfx::ImageSkia& icon,
-                              const MessageBoxCallback& callback) {
+                              MessageBoxCallback callback) {
   int result = ShowTaskDialogUTF8(parent, type, buttons, default_id, cancel_id,
                                   options, title, message, detail,
                                   checkbox_label, &checkbox_checked, icon);
-  content::BrowserThread::PostTask(
-      content::BrowserThread::UI, FROM_HERE,
-      base::Bind(callback, result, checkbox_checked));
-  content::BrowserThread::DeleteSoon(
-      content::BrowserThread::UI, FROM_HERE, thread);
+  base::PostTaskWithTraits(
+      FROM_HERE, {content::BrowserThread::UI},
+      base::BindOnce(std::move(callback), result, checkbox_checked));
+  content::BrowserThread::DeleteSoon(content::BrowserThread::UI, FROM_HERE,
+                                     thread);
 }
 
 }  // namespace
 
-int ShowMessageBox(NativeWindow* parent,
-                   MessageBoxType type,
-                   const std::vector<std::string>& buttons,
-                   int default_id,
-                   int cancel_id,
-                   int options,
-                   const std::string& title,
-                   const std::string& message,
-                   const std::string& detail,
-                   const gfx::ImageSkia& icon) {
+int ShowMessageBoxSync(NativeWindow* parent,
+                       MessageBoxType type,
+                       const std::vector<std::string>& buttons,
+                       int default_id,
+                       int cancel_id,
+                       int options,
+                       const std::string& title,
+                       const std::string& message,
+                       const std::string& detail,
+                       const gfx::ImageSkia& icon) {
   atom::UnresponsiveSuppressor suppressor;
   return ShowTaskDialogUTF8(parent, type, buttons, default_id, cancel_id,
                             options, title, message, detail, "", nullptr, icon);
@@ -255,22 +259,22 @@ void ShowMessageBox(NativeWindow* parent,
                     const std::string& checkbox_label,
                     bool checkbox_checked,
                     const gfx::ImageSkia& icon,
-                    const MessageBoxCallback& callback) {
-  std::unique_ptr<base::Thread> thread(
-      new base::Thread(ATOM_PRODUCT_NAME "MessageBoxThread"));
+                    MessageBoxCallback callback) {
+  auto thread =
+      std::make_unique<base::Thread>(ATOM_PRODUCT_NAME "MessageBoxThread");
   thread->init_com_with_mta(false);
   if (!thread->Start()) {
-    callback.Run(cancel_id, checkbox_checked);
+    std::move(callback).Run(cancel_id, checkbox_checked);
     return;
   }
 
   base::Thread* unretained = thread.release();
   unretained->task_runner()->PostTask(
       FROM_HERE,
-      base::Bind(&RunMessageBoxInNewThread, base::Unretained(unretained),
-                 parent, type, buttons, default_id, cancel_id, options, title,
-                 message, detail, checkbox_label, checkbox_checked, icon,
-                 callback));
+      base::BindOnce(&RunMessageBoxInNewThread, base::Unretained(unretained),
+                     parent, type, buttons, default_id, cancel_id, options,
+                     title, message, detail, checkbox_label, checkbox_checked,
+                     icon, std::move(callback)));
 }
 
 void ShowErrorBox(const base::string16& title, const base::string16& content) {

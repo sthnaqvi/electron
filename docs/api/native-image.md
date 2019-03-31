@@ -11,17 +11,17 @@ For example, when creating a tray or setting a window's icon, you can pass an
 image file path as a `String`:
 
 ```javascript
-const {BrowserWindow, Tray} = require('electron')
+const { BrowserWindow, Tray } = require('electron')
 
 const appIcon = new Tray('/Users/somebody/images/icon.png')
-let win = new BrowserWindow({icon: '/Users/somebody/images/window.png'})
+let win = new BrowserWindow({ icon: '/Users/somebody/images/window.png' })
 console.log(appIcon, win)
 ```
 
 Or read the image from the clipboard which returns a `NativeImage`:
 
 ```javascript
-const {clipboard, Tray} = require('electron')
+const { clipboard, Tray } = require('electron')
 const image = clipboard.readImage()
 const appIcon = new Tray(image)
 console.log(appIcon)
@@ -73,7 +73,7 @@ images/
 
 
 ```javascript
-const {Tray} = require('electron')
+const { Tray } = require('electron')
 let appIcon = new Tray('/Users/somebody/images/icon.png')
 console.log(appIcon)
 ```
@@ -94,7 +94,7 @@ Following suffixes for DPI are also supported:
 
 ## Template Image
 
-Template images consist of black and clear colors (and an alpha channel).
+Template images consist of black and an alpha channel.
 Template images are not intended to be used as standalone images and are usually
 mixed with other content to create the desired final appearance.
 
@@ -137,6 +137,19 @@ let image = nativeImage.createFromPath('/Users/somebody/images/icon.png')
 console.log(image)
 ```
 
+### `nativeImage.createFromBitmap(buffer, options)`
+
+* `buffer` [Buffer][buffer]
+* `options` Object
+  * `width` Integer
+  * `height` Integer
+  * `scaleFactor` Double (optional) - Defaults to 1.0.
+
+Returns `NativeImage`
+
+Creates a new `NativeImage` instance from `buffer` that contains the raw bitmap
+pixel data returned by `toBitmap()`. The specific format is platform-dependent.
+
 ### `nativeImage.createFromBuffer(buffer[, options])`
 
 * `buffer` [Buffer][buffer]
@@ -147,7 +160,7 @@ console.log(image)
 
 Returns `NativeImage`
 
-Creates a new `NativeImage` instance from `buffer`.
+Creates a new `NativeImage` instance from `buffer`. Tries to decode as PNG or JPEG first.
 
 ### `nativeImage.createFromDataURL(dataURL)`
 
@@ -156,6 +169,34 @@ Creates a new `NativeImage` instance from `buffer`.
 Returns `NativeImage`
 
 Creates a new `NativeImage` instance from `dataURL`.
+
+### `nativeImage.createFromNamedImage(imageName[, hslShift])` _macOS_
+
+* `imageName` String
+* `hslShift` Number[]
+
+Returns `NativeImage`
+
+Creates a new `NativeImage` instance from the NSImage that maps to the
+given image name. See [`NSImageName`](https://developer.apple.com/documentation/appkit/nsimagename?language=objc)
+for a list of possible values.
+
+The `hslShift` is applied to the image with the following rules
+* `hsl_shift[0]` (hue): The absolute hue value for the image - 0 and 1 map
+     to 0 and 360 on the hue color wheel (red).
+* `hsl_shift[1]` (saturation): A saturation shift for the image, with the
+    following key values:
+    0 = remove all color.
+    0.5 = leave unchanged.
+    1 = fully saturate the image.
+* `hsl_shift[2]` (lightness): A lightness shift for the image, with the
+    following key values:
+    0 = remove all lightness (make all pixels black).
+    0.5 = leave unchanged.
+    1 = full lightness (make all pixels white).
+
+This means that `[-1, 0, 1]` will make the image completely white and
+`[-1, 1, 0]` will make the image completely black.
 
 ## Class: NativeImage
 
@@ -217,7 +258,7 @@ image instead of a copy, so you _must_ ensure that the associated
 
 #### `image.isEmpty()`
 
-Returns `Boolean` -  Whether the image is empty.
+Returns `Boolean` - Whether the image is empty.
 
 #### `image.getSize()`
 
@@ -235,7 +276,7 @@ Returns `Boolean` - Whether the image is a template image.
 
 #### `image.crop(rect)`
 
-* `rect` [Rectangle](structures/rectangle.md) - The area of the image to crop
+* `rect` [Rectangle](structures/rectangle.md) - The area of the image to crop.
 
 Returns `NativeImage` - The cropped image.
 
@@ -243,7 +284,7 @@ Returns `NativeImage` - The cropped image.
 
 * `options` Object
   * `width` Integer (optional) - Defaults to the image's width.
-  * `height` Integer (optional) - Defaults to the image's height
+  * `height` Integer (optional) - Defaults to the image's height.
   * `quality` String (optional) - The desired quality of the resize image.
     Possible values are `good`, `better` or `best`. The default is `best`.
     These values express a desired quality/speed tradeoff. They are translated

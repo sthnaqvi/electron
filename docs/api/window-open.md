@@ -3,7 +3,7 @@
 > Open a new window and load a URL.
 
 When `window.open` is called to create a new window in a web page, a new instance
-of `BrowserWindow` will be created for the `url` and a proxy will be returned
+of [`BrowserWindow`](browser-window.md) will be created for the `url` and a proxy will be returned
 to `window.open` to let the page have limited control over it.
 
 The proxy has limited standard functionality implemented to be
@@ -24,7 +24,12 @@ Returns [`BrowserWindowProxy`](browser-window-proxy.md) - Creates a new window
 and returns an instance of `BrowserWindowProxy` class.
 
 The `features` string follows the format of standard browser, but each feature
-has to be a field of `BrowserWindow`'s options.
+has to be a field of `BrowserWindow`'s options. These are the features you can set via `features` string: `zoomFactor`, `nodeIntegration`, `preload`, `javascript`, `contextIsolation`, `webviewTag`.
+
+For example:
+```js
+window.open('https://github.com', '_blank', 'nodeIntegration=no')
+```
 
 **Notes:**
 

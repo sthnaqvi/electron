@@ -1,26 +1,23 @@
-// Disable use of deprecated functions.
-process.throwDeprecation = true
+// Deprecated APIs are still supported and should be tested.
+process.throwDeprecation = false
 
 const electron = require('electron')
-const {app, BrowserWindow, crashReporter, dialog, ipcMain, protocol, webContents} = electron
-
-const {Coverage} = require('electabul')
+const { app, BrowserWindow, crashReporter, dialog, ipcMain, protocol, webContents } = electron
 
 const fs = require('fs')
 const path = require('path')
-const url = require('url')
 const util = require('util')
 const v8 = require('v8')
 
-var argv = require('yargs')
+const argv = require('yargs')
   .boolean('ci')
   .string('g').alias('g', 'grep')
   .boolean('i').alias('i', 'invert')
   .argv
 
-var window = null
+let window = null
 
- // will be used by crash-reporter spec.
+// will be used by crash-reporter spec.
 process.port = 0
 process.crashServicePid = 0
 
@@ -29,12 +26,20 @@ app.commandLine.appendSwitch('js-flags', '--expose_gc')
 app.commandLine.appendSwitch('ignore-certificate-errors')
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
 
+// Disable security warnings (the security warnings test will enable them)
+process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = true
+
 // Accessing stdout in the main process will result in the process.stdout
 // throwing UnknownSystemError in renderer process sometimes. This line makes
 // sure we can reproduce it in renderer process.
+// eslint-disable-next-line
 process.stdout
 
+// Adding a variable for sandbox process.env test validation
+process.env.sandboxmain = ''
+
 // Access console to reproduce #3482.
+// eslint-disable-next-line
 console
 
 ipcMain.on('message', function (event, ...args) {
@@ -49,7 +54,7 @@ if (process.platform !== 'darwin') {
 // Write output to file if OUTPUT_TO_FILE is defined.
 const outputToFile = process.env.OUTPUT_TO_FILE
 const print = function (_, args) {
-  let output = util.format.apply(null, args)
+  const output = util.format.apply(null, args)
   if (outputToFile) {
     fs.appendFileSync(outputToFile, output + '\n')
   } else {
@@ -71,14 +76,12 @@ ipcMain.on('echo', function (event, msg) {
   event.returnValue = msg
 })
 
-const coverage = new Coverage({
-  outputPath: path.join(__dirname, '..', '..', 'out', 'coverage')
-})
-coverage.setup()
+global.setTimeoutPromisified = util.promisify(setTimeout)
 
-ipcMain.on('get-main-process-coverage', function (event) {
-  event.returnValue = global.__coverage__ || null
-})
+global.permissionChecks = {
+  allow: () => electron.session.defaultSession.setPermissionCheckHandler(null),
+  reject: () => electron.session.defaultSession.setPermissionCheckHandler(() => false)
+}
 
 global.isCi = !!argv.ci
 if (global.isCi) {
@@ -89,21 +92,30 @@ if (global.isCi) {
   })
 }
 
-global.nativeModulesEnabled = process.platform !== 'win32' || process.execPath.toLowerCase().indexOf('\\out\\d\\') === -1
+global.nativeModulesEnabled = !process.env.ELECTRON_SKIP_NATIVE_MODULE_TESTS
 
 // Register app as standard scheme.
 global.standardScheme = 'app'
 global.zoomScheme = 'zoom'
-protocol.registerStandardSchemes([global.standardScheme, global.zoomScheme], { secure: true })
+protocol.registerSchemesAsPrivileged([
+  { scheme: global.standardScheme, privileges: { standard: true, secure: true } },
+  { scheme: global.zoomScheme, privileges: { standard: true, secure: true } },
+  { scheme: 'cors', privileges: { corsEnabled: true, supportFetchAPI: true } },
+  { scheme: 'cors-blob', privileges: { corsEnabled: true, supportFetchAPI: true } },
+  { scheme: 'no-cors', privileges: { supportFetchAPI: true } },
+  { scheme: 'no-fetch', privileges: { corsEnabled: true } }
+])
 
 app.on('window-all-closed', function () {
   app.quit()
 })
 
-app.on('web-contents-created', (event, contents) => {
-  contents.on('crashed', (event, killed) => {
-    console.log(`webContents ${contents.id} crashed: ${contents.getURL()} (killed=${killed})`)
-  })
+app.on('gpu-process-crashed', (event, killed) => {
+  console.log(`GPU process crashed (killed=${killed})`)
+})
+
+app.on('renderer-process-crashed', (event, contents, killed) => {
+  console.log(`webContents ${contents.id} crashed: ${contents.getURL()} (killed=${killed})`)
 })
 
 app.on('ready', function () {
@@ -121,19 +133,19 @@ app.on('ready', function () {
     width: 800,
     height: 600,
     webPreferences: {
-      backgroundThrottling: false
+      backgroundThrottling: false,
+      nodeIntegration: true,
+      webviewTag: true
     }
   })
-  window.loadURL(url.format({
-    pathname: path.join(__dirname, '/index.html'),
-    protocol: 'file',
+  window.loadFile('static/index.html', {
     query: {
       grep: argv.grep,
       invert: argv.invert ? 'true' : ''
     }
-  }))
+  })
   window.on('unresponsive', function () {
-    var chosen = dialog.showMessageBox(window, {
+    const chosen = dialog.showMessageBox(window, {
       type: 'warning',
       buttons: ['Close', 'Keep Waiting'],
       message: 'Window is not responsing',
@@ -141,11 +153,15 @@ app.on('ready', function () {
     })
     if (chosen === 0) window.destroy()
   })
+  window.webContents.on('crashed', function () {
+    console.error('Renderer process crashed')
+    process.exit(1)
+  })
 
   // For session's download test, listen 'will-download' event in browser, and
   // reply the result to renderer for verifying
-  var downloadFilePath = path.join(__dirname, '..', 'fixtures', 'mock.pdf')
-  ipcMain.on('set-download-option', function (event, needCancel, preventDefault, filePath = downloadFilePath) {
+  const downloadFilePath = path.join(__dirname, '..', 'fixtures', 'mock.pdf')
+  ipcMain.on('set-download-option', function (event, needCancel, preventDefault, filePath = downloadFilePath, dialogOptions = {}) {
     window.webContents.session.once('will-download', function (e, item) {
       window.webContents.send('download-created',
         item.getState(),
@@ -171,6 +187,7 @@ app.on('ready', function () {
           item.resume()
         } else {
           item.setSavePath(filePath)
+          item.setSaveDialogOptions(dialogOptions)
         }
         item.on('done', function (e, state) {
           window.webContents.send('download-done',
@@ -182,6 +199,7 @@ app.on('ready', function () {
             item.getContentDisposition(),
             item.getFilename(),
             item.getSavePath(),
+            item.getSaveDialogOptions(),
             item.getURLChain(),
             item.getLastModifiedTime(),
             item.getETag())
@@ -196,6 +214,7 @@ app.on('ready', function () {
     webContents.fromId(id).once('before-input-event', (event, input) => {
       if (key === input.key) event.preventDefault()
     })
+    event.returnValue = null
   })
 
   ipcMain.on('executeJavaScript', function (event, code, hasCallback) {
@@ -213,6 +232,10 @@ app.on('ready', function () {
       window.webContents.send('executeJavaScript-promise-response', result)
     }).catch((error) => {
       window.webContents.send('executeJavaScript-promise-error', error)
+
+      if (error && error.name) {
+        window.webContents.send('executeJavaScript-promise-error-name', error.name)
+      }
     })
 
     if (!hasCallback) {
@@ -220,6 +243,45 @@ app.on('ready', function () {
     }
   })
 })
+
+ipcMain.on('handle-next-ipc-message-sync', function (event, returnValue) {
+  event.sender.once('ipc-message-sync', (event, channel, args) => {
+    event.returnValue = returnValue
+  })
+})
+
+for (const eventName of [
+  'remote-require',
+  'remote-get-global',
+  'remote-get-builtin'
+]) {
+  ipcMain.on(`handle-next-${eventName}`, function (event, valuesMap = {}) {
+    event.sender.once(eventName, (event, name) => {
+      if (valuesMap.hasOwnProperty(name)) {
+        event.returnValue = valuesMap[name]
+      } else {
+        event.preventDefault()
+      }
+    })
+  })
+}
+
+for (const eventName of [
+  'desktop-capturer-get-sources',
+  'remote-get-current-window',
+  'remote-get-current-web-contents',
+  'remote-get-guest-web-contents'
+]) {
+  ipcMain.on(`handle-next-${eventName}`, function (event, returnValue) {
+    event.sender.once(eventName, (event) => {
+      if (returnValue) {
+        event.returnValue = returnValue
+      } else {
+        event.preventDefault()
+      }
+    })
+  })
+}
 
 ipcMain.on('set-client-certificate-option', function (event, skip) {
   app.once('select-client-certificate', function (event, webContents, url, list, callback) {
@@ -245,6 +307,22 @@ ipcMain.on('close-on-will-navigate', (event, id) => {
   })
 })
 
+ipcMain.on('close-on-will-redirect', (event, id) => {
+  const contents = event.sender
+  const window = BrowserWindow.fromId(id)
+  window.webContents.once('will-redirect', (event, input) => {
+    window.close()
+    contents.send('closed-on-will-redirect')
+  })
+})
+
+ipcMain.on('prevent-will-redirect', (event, id) => {
+  const window = BrowserWindow.fromId(id)
+  window.webContents.once('will-redirect', (event) => {
+    event.preventDefault()
+  })
+})
+
 ipcMain.on('create-window-with-options-cycle', (event) => {
   // This can't be done over remote since cycles are already
   // nulled out at the IPC layer
@@ -256,7 +334,7 @@ ipcMain.on('create-window-with-options-cycle', (event) => {
     }
   }
   foo.baz2 = foo.baz
-  const window = new BrowserWindow({show: false, foo: foo})
+  const window = new BrowserWindow({ show: false, foo: foo })
   event.returnValue = window.id
 })
 
@@ -295,26 +373,21 @@ ipcMain.on('disable-preload-on-next-will-attach-webview', (event, id) => {
 
 ipcMain.on('try-emit-web-contents-event', (event, id, eventName) => {
   const consoleWarn = console.warn
-  let warningMessage = null
   const contents = webContents.fromId(id)
   const listenerCountBefore = contents.listenerCount(eventName)
 
-  try {
-    console.warn = (message) => {
-      warningMessage = message
-    }
-    contents.emit(eventName, {sender: contents})
-  } finally {
+  console.warn = (warningMessage) => {
     console.warn = consoleWarn
+
+    const listenerCountAfter = contents.listenerCount(eventName)
+    event.returnValue = {
+      warningMessage,
+      listenerCountBefore,
+      listenerCountAfter
+    }
   }
 
-  const listenerCountAfter = contents.listenerCount(eventName)
-
-  event.returnValue = {
-    warningMessage,
-    listenerCountBefore,
-    listenerCountAfter
-  }
+  contents.emit(eventName, { sender: contents })
 })
 
 ipcMain.on('handle-uncaught-exception', (event, message) => {
@@ -361,6 +434,26 @@ ipcMain.on('test-webcontents-navigation-observer', (event, options) => {
   contents.loadURL(options.url)
 })
 
+ipcMain.on('test-browserwindow-destroy', (event, testOptions) => {
+  const focusListener = (event, win) => win.id
+  app.on('browser-window-focus', focusListener)
+  const windowCount = 3
+  const windowOptions = {
+    show: false,
+    width: 400,
+    height: 400,
+    webPreferences: {
+      backgroundThrottling: false
+    }
+  }
+  const windows = Array.from(Array(windowCount)).map(x => new BrowserWindow(windowOptions))
+  windows.forEach(win => win.show())
+  windows.forEach(win => win.focus())
+  windows.forEach(win => win.destroy())
+  app.removeListener('browser-window-focus', focusListener)
+  event.sender.send(testOptions.responseEvent)
+})
+
 // Suspend listeners until the next event and then restore them
 const suspendListeners = (emitter, eventName, callback) => {
   const listeners = emitter.listeners(eventName)
@@ -370,6 +463,8 @@ const suspendListeners = (emitter, eventName, callback) => {
     listeners.forEach((listener) => {
       emitter.on(eventName, listener)
     })
+
+    // eslint-disable-next-line standard/no-callback-literal
     callback(...args)
   })
 }

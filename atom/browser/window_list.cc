@@ -81,7 +81,10 @@ void WindowList::RemoveObserver(WindowListObserver* observer) {
 // static
 void WindowList::CloseAllWindows() {
   WindowVector windows = GetInstance()->windows_;
-  for (const auto& window : windows)
+#if defined(OS_MACOSX)
+  std::reverse(windows.begin(), windows.end());
+#endif
+  for (auto* const& window : windows)
     if (!window->IsClosed())
       window->Close();
 }
@@ -89,14 +92,12 @@ void WindowList::CloseAllWindows() {
 // static
 void WindowList::DestroyAllWindows() {
   WindowVector windows = GetInstance()->windows_;
-  for (const auto& window : windows)
-    window->CloseContents(nullptr);  // e.g. Destroy()
+  for (auto* const& window : windows)
+    window->CloseImmediately();  // e.g. Destroy()
 }
 
-WindowList::WindowList() {
-}
+WindowList::WindowList() {}
 
-WindowList::~WindowList() {
-}
+WindowList::~WindowList() {}
 
 }  // namespace atom

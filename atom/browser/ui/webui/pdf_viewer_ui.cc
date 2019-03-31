@@ -5,19 +5,23 @@
 #include "atom/browser/ui/webui/pdf_viewer_ui.h"
 
 #include <map>
+#include <memory>
+#include <utility>
 
 #include "atom/browser/atom_browser_context.h"
 #include "atom/browser/loader/layered_resource_handler.h"
 #include "atom/browser/ui/webui/pdf_viewer_handler.h"
+#include "atom/common/api/api_messages.h"
 #include "atom/common/atom_constants.h"
 #include "base/sequenced_task_runner_helpers.h"
-#include "components/pdf/common/pdf_messages.h"
+#include "base/task/post_task.h"
 #include "content/browser/loader/resource_dispatcher_host_impl.h"
 #include "content/browser/loader/resource_request_info_impl.h"
 #include "content/browser/loader/stream_resource_handler.h"
 #include "content/browser/resource_context_impl.h"
 #include "content/browser/streams/stream.h"
 #include "content/browser/streams/stream_context.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -32,6 +36,7 @@
 #include "net/base/mime_util.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
+#include "services/network/public/cpp/resource_response.h"
 #include "ui/base/resource/resource_bundle.h"
 
 using content::BrowserThread;
@@ -78,11 +83,13 @@ class BundledDataSource : public content::URLDataSource {
   }
 
   std::string GetMimeType(const std::string& path) const override {
-    std::string filename = PathWithoutParams(path);
+    base::FilePath::StringType ext =
+        base::FilePath::FromUTF8Unsafe(PathWithoutParams(path)).Extension();
     std::string mime_type;
-    net::GetMimeTypeFromFile(
-        base::FilePath::FromUTF8Unsafe(filename), &mime_type);
-    return mime_type;
+    if (!ext.empty() &&
+        net::GetWellKnownMimeTypeFromExtension(ext.substr(1), &mime_type))
+      return mime_type;
+    return "text/html";
   }
 
   bool ShouldAddContentSecurityPolicy() const override { return false; }
@@ -132,7 +139,7 @@ class PdfViewerUI::ResourceRequester
     request->set_method("GET");
 
     content::ResourceDispatcherHostImpl::Get()->InitializeURLRequest(
-        request.get(), content::Referrer(url, blink::WebReferrerPolicyDefault),
+        request.get(), content::Referrer(url, blink::kWebReferrerPolicyDefault),
         false,  // download.
         render_process_id, render_view_id, render_frame_id,
         content::PREVIEWS_OFF, resource_context);
@@ -143,8 +150,8 @@ class PdfViewerUI::ResourceRequester
         content::GetStreamContextForResourceContext(resource_context);
 
     std::unique_ptr<content::ResourceHandler> handler =
-        base::MakeUnique<content::StreamResourceHandler>(
-            request.get(), stream_context->registry(), origin);
+        std::make_unique<content::StreamResourceHandler>(
+            request.get(), stream_context->registry(), origin, false);
     info->set_is_stream(true);
     stream_info_.reset(new content::StreamInfo);
     stream_info_->handle =
@@ -167,7 +174,7 @@ class PdfViewerUI::ResourceRequester
 
  protected:
   // atom::LayeredResourceHandler::Delegate:
-  void OnResponseStarted(content::ResourceResponse* response) override {
+  void OnResponseStarted(network::ResourceResponse* response) override {
     DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
     auto resource_response_head = response->head;
@@ -178,8 +185,8 @@ class PdfViewerUI::ResourceRequester
           new net::HttpResponseHeaders(headers->raw_headers());
     stream_info_->mime_type = mime_type;
 
-    BrowserThread::PostTask(
-        BrowserThread::UI, FROM_HERE,
+    base::PostTaskWithTraits(
+        FROM_HERE, {BrowserThread::UI},
         base::Bind(&CallMigrationCallback<StreamResponseCallback>,
                    base::Passed(&stream_response_cb_),
                    base::Passed(&stream_info_)));
@@ -215,7 +222,7 @@ bool PdfViewerUI::OnMessageReceived(
     content::RenderFrameHost* render_frame_host) {
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP(PdfViewerUI, message)
-    IPC_MESSAGE_HANDLER(PDFHostMsg_PDFSaveURLAs, OnSaveURLAs)
+    IPC_MESSAGE_HANDLER(AtomFrameHostMsg_PDFSaveURLAs, OnSaveURLAs)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
@@ -238,8 +245,8 @@ void PdfViewerUI::RenderFrameCreated(content::RenderFrameHost* rfh) {
   auto callback =
       base::BindOnce(&PdfViewerUI::OnPdfStreamCreated, base::Unretained(this));
   resource_requester_ = new ResourceRequester(std::move(callback));
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
       base::Bind(&ResourceRequester::StartRequest, resource_requester_,
                  GURL(src_), GURL(kPdfViewerUIOrigin), render_process_id,
                  render_view_id, render_frame_id, resource_context));

@@ -38,7 +38,7 @@ namespace {
 // Minidump with stacks, PEB, TEB, and unloaded module list.
 const MINIDUMP_TYPE kSmallDumpType = static_cast<MINIDUMP_TYPE>(
     MiniDumpWithProcessThreadData |  // Get PEB and TEB.
-    MiniDumpWithUnloadedModules);  // Get unloaded modules when available.
+    MiniDumpWithUnloadedModules);    // Get unloaded modules when available.
 
 const wchar_t kWaitEventFormat[] = L"$1CrashServiceWaitEvent";
 const wchar_t kPipeNameFormat[] = L"\\\\.\\pipe\\$1 Crash Service";
@@ -47,8 +47,8 @@ const wchar_t kPipeNameFormat[] = L"\\\\.\\pipe\\$1 Crash Service";
 const int kNameMaxLength = 64;
 const int kValueMaxLength = 64;
 
-typedef NTSTATUS (WINAPI* NtTerminateProcessPtr)(HANDLE ProcessHandle,
-                                                 NTSTATUS ExitStatus);
+typedef NTSTATUS(WINAPI* NtTerminateProcessPtr)(HANDLE ProcessHandle,
+                                                NTSTATUS ExitStatus);
 char* g_real_terminate_process_stub = NULL;
 
 void TerminateProcessWithoutDump() {
@@ -71,11 +71,11 @@ int CrashForExceptionInNonABICompliantCodeRange(
     ULONG64 EstablisherFrame,
     PCONTEXT ContextRecord,
     PDISPATCHER_CONTEXT DispatcherContext) {
-  EXCEPTION_POINTERS info = { ExceptionRecord, ContextRecord };
+  EXCEPTION_POINTERS info = {ExceptionRecord, ContextRecord};
   if (!CrashReporter::GetInstance())
     return EXCEPTION_CONTINUE_SEARCH;
-  return static_cast<CrashReporterWin*>(CrashReporter::GetInstance())->
-      CrashForException(&info);
+  return static_cast<CrashReporterWin*>(CrashReporter::GetInstance())
+      ->CrashForException(&info);
 }
 
 struct ExceptionHandlerRecord {
@@ -93,8 +93,13 @@ bool RegisterNonABICompliantCodeRange(void* start, size_t size_in_bytes) {
 
   // All addresses are 32bit relative offsets to start.
   record->runtime_function.BeginAddress = 0;
+#if defined(_M_ARM64)
+  record->runtime_function.FunctionLength =
+      base::checked_cast<DWORD>(size_in_bytes);
+#else
   record->runtime_function.EndAddress =
       base::checked_cast<DWORD>(size_in_bytes);
+#endif
   record->runtime_function.UnwindData =
       offsetof(ExceptionHandlerRecord, unwind_info);
 
@@ -112,7 +117,8 @@ bool RegisterNonABICompliantCodeRange(void* start, size_t size_in_bytes) {
   // mov imm64, rax
   record->thunk[0] = 0x48;
   record->thunk[1] = 0xb8;
-  void* handler = &CrashForExceptionInNonABICompliantCodeRange;
+  void* handler =
+      reinterpret_cast<void*>(&CrashForExceptionInNonABICompliantCodeRange);
   memcpy(&record->thunk[2], &handler, 8);
 
   // jmp rax
@@ -137,13 +143,9 @@ void UnregisterNonABICompliantCodeRange(void* start) {
 
 }  // namespace
 
-CrashReporterWin::CrashReporterWin()
-    : skip_system_crash_handler_(false),
-      code_range_registered_(false) {
-}
+CrashReporterWin::CrashReporterWin() {}
 
-CrashReporterWin::~CrashReporterWin() {
-}
+CrashReporterWin::~CrashReporterWin() {}
 
 void CrashReporterWin::InitBreakpad(const std::string& product_name,
                                     const std::string& version,
@@ -172,12 +174,8 @@ void CrashReporterWin::InitBreakpad(const std::string& product_name,
   breakpad_.reset();
 
   breakpad_.reset(new google_breakpad::ExceptionHandler(
-      crashes_dir.DirName().value(),
-      FilterCallback,
-      MinidumpCallback,
-      this,
-      google_breakpad::ExceptionHandler::HANDLER_ALL,
-      kSmallDumpType,
+      crashes_dir.DirName().value(), FilterCallback, MinidumpCallback, this,
+      google_breakpad::ExceptionHandler::HANDLER_ALL, kSmallDumpType,
       pipe_name.c_str(),
       GetCustomInfo(product_name, version, company_name, upload_to_server)));
 
@@ -209,7 +207,10 @@ void CrashReporterWin::SetUploadParameters() {
 int CrashReporterWin::CrashForException(EXCEPTION_POINTERS* info) {
   if (breakpad_) {
     breakpad_->WriteMinidumpForException(info);
-    TerminateProcessWithoutDump();
+    if (skip_system_crash_handler_)
+      TerminateProcessWithoutDump();
+    else
+      RaiseFailFastException(info->ExceptionRecord, info->ContextRecord, 0);
   }
   return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -229,7 +230,7 @@ bool CrashReporterWin::MinidumpCallback(const wchar_t* dump_path,
                                         MDRawAssertionInfo* assertion,
                                         bool succeeded) {
   CrashReporterWin* self = static_cast<CrashReporterWin*>(context);
-  if (succeeded && !self->skip_system_crash_handler_)
+  if (succeeded && self->skip_system_crash_handler_)
     return true;
   else
     return false;
@@ -243,13 +244,13 @@ google_breakpad::CustomClientInfo* CrashReporterWin::GetCustomInfo(
   custom_info_entries_.clear();
   custom_info_entries_.reserve(3 + upload_parameters_.size());
 
-  custom_info_entries_.push_back(google_breakpad::CustomInfoEntry(
-      L"prod", L"Electron"));
+  custom_info_entries_.push_back(
+      google_breakpad::CustomInfoEntry(L"prod", L"Electron"));
   custom_info_entries_.push_back(google_breakpad::CustomInfoEntry(
       L"ver", base::UTF8ToWide(version).c_str()));
   if (!upload_to_server) {
-    custom_info_entries_.push_back(google_breakpad::CustomInfoEntry(
-        L"skip_upload", L"1"));
+    custom_info_entries_.push_back(
+        google_breakpad::CustomInfoEntry(L"skip_upload", L"1"));
   }
 
   for (StringMap::const_iterator iter = upload_parameters_.begin();

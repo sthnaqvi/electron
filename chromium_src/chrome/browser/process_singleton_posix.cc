@@ -55,6 +55,7 @@
 
 #include <stddef.h>
 
+#include "atom/browser/browser.h"
 #include "atom/common/atom_command_line.h"
 
 #include "base/base_paths.h"
@@ -66,7 +67,6 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram_macros.h"
@@ -76,18 +76,21 @@
 #include "base/rand_util.h"
 #include "base/sequenced_task_runner_helpers.h"
 #include "base/single_thread_task_runner.h"
-#include "base/single_thread_task_runner.h"
+#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/post_task.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/network_interfaces.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -112,16 +115,17 @@ const char kACKToken[] = "ACK";
 const char kShutdownToken[] = "SHUTDOWN";
 const char kTokenDelimiter = '\0';
 const int kMaxMessageLength = 32 * 1024;
-const int kMaxACKMessageLength = arraysize(kShutdownToken) - 1;
+const int kMaxACKMessageLength = base::size(kShutdownToken) - 1;
 
 const char kLockDelimiter = '-';
 
 const base::FilePath::CharType kSingletonCookieFilename[] =
-      FILE_PATH_LITERAL("SingletonCookie");
+    FILE_PATH_LITERAL("SingletonCookie");
 
-const base::FilePath::CharType kSingletonLockFilename[] = FILE_PATH_LITERAL("SingletonLock");
+const base::FilePath::CharType kSingletonLockFilename[] =
+    FILE_PATH_LITERAL("SingletonLock");
 const base::FilePath::CharType kSingletonSocketFilename[] =
-      FILE_PATH_LITERAL("SS");
+    FILE_PATH_LITERAL("SS");
 
 // Set the close-on-exec bit on a file descriptor.
 // Returns 0 on success, -1 on failure.
@@ -141,7 +145,7 @@ void CloseSocket(int fd) {
 }
 
 // Write a message to a socket fd.
-bool WriteToSocket(int fd, const char *message, size_t length) {
+bool WriteToSocket(int fd, const char* message, size_t length) {
   DCHECK(message);
   DCHECK(length);
   size_t bytes_written = 0;
@@ -222,9 +226,9 @@ ssize_t ReadFromSocket(int fd,
 // Set up a sockaddr appropriate for messaging.
 void SetupSockAddr(const std::string& path, struct sockaddr_un* addr) {
   addr->sun_family = AF_UNIX;
-  CHECK(path.length() < arraysize(addr->sun_path))
+  CHECK(path.length() < base::size(addr->sun_path))
       << "Socket path too long: " << path;
-  base::strlcpy(addr->sun_path, path.c_str(), arraysize(addr->sun_path));
+  base::strlcpy(addr->sun_path, path.c_str(), base::size(addr->sun_path));
 }
 
 // Set up a socket appropriate for messaging.
@@ -320,9 +324,9 @@ bool DisplayProfileInUseError(const base::FilePath& lock_path,
 bool IsChromeProcess(pid_t pid) {
   base::FilePath other_chrome_path(base::GetProcessExecutablePath(pid));
 
-  auto command_line = base::CommandLine::ForCurrentProcess();
+  auto* command_line = base::CommandLine::ForCurrentProcess();
   base::FilePath exec_path(command_line->GetProgram());
-  PathService::Get(base::FILE_EXE, &exec_path);
+  base::PathService::Get(base::FILE_EXE, &exec_path);
 
   return (!other_chrome_path.empty() &&
           other_chrome_path.BaseName() == exec_path.BaseName());
@@ -343,13 +347,14 @@ class ScopedSocket {
       CloseSocket(fd_);
     fd_ = -1;
   }
+
  private:
   int fd_;
 };
 
 // Returns a random string for uniquifying profile connections.
 std::string GenerateCookie() {
-  return base::Uint64ToString(base::RandUint64());
+  return base::NumberToString(base::RandUint64());
 }
 
 bool CheckCookie(const base::FilePath& path, const base::FilePath& cookie) {
@@ -380,8 +385,8 @@ bool ConnectSocket(ScopedSocket* socket,
     base::FilePath cookie = ReadLink(cookie_path);
     if (cookie.empty())
       return false;
-    base::FilePath remote_cookie = socket_target.DirName().
-                             Append(kSingletonCookieFilename);
+    base::FilePath remote_cookie =
+        socket_target.DirName().Append(kSingletonCookieFilename);
     // Verify the cookie before connecting.
     if (!CheckCookie(remote_cookie, cookie))
       return false;
@@ -389,9 +394,8 @@ bool ConnectSocket(ScopedSocket* socket,
     // owner. Try to connect.
     sockaddr_un addr;
     SetupSockAddr(socket_target.value(), &addr);
-    int ret = HANDLE_EINTR(connect(socket->fd(),
-                                   reinterpret_cast<sockaddr*>(&addr),
-                                   sizeof(addr)));
+    int ret = HANDLE_EINTR(connect(
+        socket->fd(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)));
     if (ret != 0)
       return false;
     // Check the cookie again. We only link in /tmp, which is sticky, so, if the
@@ -408,9 +412,8 @@ bool ConnectSocket(ScopedSocket* socket,
     // later). Just connect to it directly; this is an older version of Chrome.
     sockaddr_un addr;
     SetupSockAddr(socket_path.value(), &addr);
-    int ret = HANDLE_EINTR(connect(socket->fd(),
-                                   reinterpret_cast<sockaddr*>(&addr),
-                                   sizeof(addr)));
+    int ret = HANDLE_EINTR(connect(
+        socket->fd(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)));
     return (ret == 0);
   } else {
     // File is missing, or other error.
@@ -490,7 +493,7 @@ class ProcessSingleton::LinuxWatcher
 
     // Finish handling the incoming message by optionally sending back an ACK
     // message and removing this SocketReader.
-    void FinishWithACK(const char *message, size_t length);
+    void FinishWithACK(const char* message, size_t length);
 
    private:
     void OnSocketCanReadWithoutBlocking();
@@ -546,9 +549,7 @@ class ProcessSingleton::LinuxWatcher
   friend struct BrowserThread::DeleteOnThread<BrowserThread::IO>;
   friend class base::DeleteHelper<ProcessSingleton::LinuxWatcher>;
 
-  ~LinuxWatcher() {
-    DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  }
+  ~LinuxWatcher() { DCHECK_CURRENTLY_ON(BrowserThread::IO); }
 
   void OnSocketCanReadWithoutBlocking(int socket);
 
@@ -584,7 +585,7 @@ void ProcessSingleton::LinuxWatcher::OnSocketCanReadWithoutBlocking(
   DCHECK(base::SetNonBlocking(connection_socket))
       << "Failed to make non-blocking socket.";
   readers_.insert(
-      base::MakeUnique<SocketReader>(this, ui_task_runner_, connection_socket));
+      std::make_unique<SocketReader>(this, ui_task_runner_, connection_socket));
 }
 
 void ProcessSingleton::LinuxWatcher::StartListening(int socket) {
@@ -596,21 +597,21 @@ void ProcessSingleton::LinuxWatcher::StartListening(int socket) {
 }
 
 void ProcessSingleton::LinuxWatcher::HandleMessage(
-    const std::string& current_dir, const std::vector<std::string>& argv,
+    const std::string& current_dir,
+    const std::vector<std::string>& argv,
     SocketReader* reader) {
   DCHECK(ui_task_runner_->BelongsToCurrentThread());
   DCHECK(reader);
 
-  if (parent_->notification_callback_.Run(argv,
-                                          base::FilePath(current_dir))) {
+  if (parent_->notification_callback_.Run(argv, base::FilePath(current_dir))) {
     // Send back "ACK" message to prevent the client process from starting up.
-    reader->FinishWithACK(kACKToken, arraysize(kACKToken) - 1);
+    reader->FinishWithACK(kACKToken, base::size(kACKToken) - 1);
   } else {
     LOG(WARNING) << "Not handling interprocess notification as browser"
                     " is shutting down";
     // Send back "SHUTDOWN" message, so that the client process can start up
     // without killing this process.
-    reader->FinishWithACK(kShutdownToken, arraysize(kShutdownToken) - 1);
+    reader->FinishWithACK(kShutdownToken, base::size(kShutdownToken) - 1);
     return;
   }
 }
@@ -654,7 +655,7 @@ void ProcessSingleton::LinuxWatcher::SocketReader::
   }
 
   // Validate the message.  The shortest message is kStartToken\0x\0x
-  const size_t kMinMessageLength = arraysize(kStartToken) + 4;
+  const size_t kMinMessageLength = base::size(kStartToken) + 4;
   if (bytes_read_ < kMinMessageLength) {
     buf_[bytes_read_] = 0;
     LOG(ERROR) << "Invalid socket message (wrong length):" << buf_;
@@ -663,9 +664,9 @@ void ProcessSingleton::LinuxWatcher::SocketReader::
   }
 
   std::string str(buf_, bytes_read_);
-  std::vector<std::string> tokens = base::SplitString(
-      str, std::string(1, kTokenDelimiter),
-      base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
+  std::vector<std::string> tokens =
+      base::SplitString(str, std::string(1, kTokenDelimiter),
+                        base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
 
   if (tokens.size() < 3 || tokens[0] != kStartToken) {
     LOG(ERROR) << "Wrong message format: " << str;
@@ -694,7 +695,8 @@ void ProcessSingleton::LinuxWatcher::SocketReader::
 }
 
 void ProcessSingleton::LinuxWatcher::SocketReader::FinishWithACK(
-    const char *message, size_t length) {
+    const char* message,
+    size_t length) {
   if (message && length) {
     // Not necessary to care about the return value.
     WriteToSocket(fd_, message, length);
@@ -703,11 +705,9 @@ void ProcessSingleton::LinuxWatcher::SocketReader::FinishWithACK(
   if (shutdown(fd_, SHUT_WR) < 0)
     PLOG(ERROR) << "shutdown() failed";
 
-  BrowserThread::PostTask(
-      BrowserThread::IO,
-      FROM_HERE,
-      base::Bind(&ProcessSingleton::LinuxWatcher::RemoveSocketReader,
-                 parent_,
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
+      base::Bind(&ProcessSingleton::LinuxWatcher::RemoveSocketReader, parent_,
                  this));
   // We will be deleted once the posted RemoveSocketReader task runs.
 }
@@ -719,20 +719,25 @@ ProcessSingleton::ProcessSingleton(
     const base::FilePath& user_data_dir,
     const NotificationCallback& notification_callback)
     : notification_callback_(notification_callback),
-      current_pid_(base::GetCurrentProcId()),
-      watcher_(new LinuxWatcher(this)) {
+      current_pid_(base::GetCurrentProcId()) {
   // The user_data_dir may have not been created yet.
+  base::ThreadRestrictions::ScopedAllowIO allow_io;
   base::CreateDirectoryAndGetError(user_data_dir, nullptr);
 
   socket_path_ = user_data_dir.Append(kSingletonSocketFilename);
   lock_path_ = user_data_dir.Append(kSingletonLockFilename);
   cookie_path_ = user_data_dir.Append(kSingletonCookieFilename);
 
-  kill_callback_ = base::Bind(&ProcessSingleton::KillProcess,
-                              base::Unretained(this));
+  kill_callback_ =
+      base::Bind(&ProcessSingleton::KillProcess, base::Unretained(this));
 }
 
 ProcessSingleton::~ProcessSingleton() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Manually free resources with IO explicitly allowed.
+  base::ThreadRestrictions::ScopedAllowIO allow_io;
+  watcher_ = nullptr;
+  ignore_result(socket_dir_.Delete());
 }
 
 ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcess() {
@@ -809,10 +814,7 @@ ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcessWithTimeout(
   }
 
   timeval socket_timeout = TimeDeltaToTimeVal(timeout);
-  setsockopt(socket.fd(),
-             SOL_SOCKET,
-             SO_SNDTIMEO,
-             &socket_timeout,
+  setsockopt(socket.fd(), SOL_SOCKET, SO_SNDTIMEO, &socket_timeout,
              sizeof(socket_timeout));
 
   // Found another process, prepare our command line
@@ -821,13 +823,13 @@ ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcessWithTimeout(
   to_send.push_back(kTokenDelimiter);
 
   base::FilePath current_dir;
-  if (!PathService::Get(base::DIR_CURRENT, &current_dir))
+  if (!base::PathService::Get(base::DIR_CURRENT, &current_dir))
     return PROCESS_NONE;
   to_send.append(current_dir.value());
 
   const std::vector<std::string>& argv = atom::AtomCommandLine::argv();
   for (std::vector<std::string>::const_iterator it = argv.begin();
-      it != argv.end(); ++it) {
+       it != argv.end(); ++it) {
     to_send.push_back(kTokenDelimiter);
     to_send.append(*it);
   }
@@ -856,10 +858,10 @@ ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcessWithTimeout(
   }
 
   buf[len] = '\0';
-  if (strncmp(buf, kShutdownToken, arraysize(kShutdownToken) - 1) == 0) {
+  if (strncmp(buf, kShutdownToken, base::size(kShutdownToken) - 1) == 0) {
     // The other process is shutting down, it's safe to start a new process.
     return PROCESS_NONE;
-  } else if (strncmp(buf, kACKToken, arraysize(kACKToken) - 1) == 0) {
+  } else if (strncmp(buf, kACKToken, base::size(kACKToken) - 1) == 0) {
 #if defined(TOOLKIT_VIEWS) && defined(OS_LINUX) && !defined(OS_CHROMEOS)
     // Likely NULL in unit tests.
     views::LinuxUI* linux_ui = views::LinuxUI::instance();
@@ -879,6 +881,21 @@ ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcessOrCreate() {
   return NotifyOtherProcessWithTimeoutOrCreate(
       *base::CommandLine::ForCurrentProcess(), kRetryAttempts,
       base::TimeDelta::FromSeconds(kTimeoutInSeconds));
+}
+
+void ProcessSingleton::StartListeningOnSocket() {
+  watcher_ = new LinuxWatcher(this);
+  base::PostTaskWithTraits(
+      FROM_HERE, {BrowserThread::IO},
+      base::Bind(&ProcessSingleton::LinuxWatcher::StartListening, watcher_,
+                 sock_));
+}
+
+void ProcessSingleton::OnBrowserReady() {
+  if (listen_on_ready_) {
+    StartListeningOnSocket();
+    listen_on_ready_ = false;
+  }
 }
 
 ProcessSingleton::NotifyResult
@@ -911,8 +928,8 @@ ProcessSingleton::NotifyOtherProcessWithTimeoutOrCreate(
   // we did.)
   // This time, we don't want to kill anything if we aren't successful, since we
   // aren't going to try to take over the lock ourselves.
-  result = NotifyOtherProcessWithTimeout(
-      command_line, retry_attempts, timeout, false);
+  result = NotifyOtherProcessWithTimeout(command_line, retry_attempts, timeout,
+                                         false);
 
   if (result == PROCESS_NOTIFIED) {
     UMA_HISTOGRAM_MEDIUM_TIMES("Chrome.ProcessSingleton.TimeToNotify",
@@ -942,16 +959,14 @@ void ProcessSingleton::DisablePromptForTesting() {
 }
 
 bool ProcessSingleton::Create() {
+  base::ThreadRestrictions::ScopedAllowIO allow_io;
   int sock;
   sockaddr_un addr;
 
   // The symlink lock is pointed to the hostname and process id, so other
   // processes can find it out.
   base::FilePath symlink_content(base::StringPrintf(
-      "%s%c%u",
-      net::GetHostName().c_str(),
-      kLockDelimiter,
-      current_pid_));
+      "%s%c%u", net::GetHostName().c_str(), kLockDelimiter, current_pid_));
 
   // Create symbol link before binding the socket, to ensure only one instance
   // can have the socket open.
@@ -1031,13 +1046,13 @@ bool ProcessSingleton::Create() {
   if (listen(sock, 5) < 0)
     NOTREACHED() << "listen failed: " << base::safe_strerror(errno);
 
-  DCHECK(BrowserThread::IsMessageLoopValid(BrowserThread::IO));
-  BrowserThread::PostTask(
-      BrowserThread::IO,
-      FROM_HERE,
-      base::Bind(&ProcessSingleton::LinuxWatcher::StartListening,
-                 watcher_,
-                 sock));
+  sock_ = sock;
+
+  if (BrowserThread::IsThreadInitialized(BrowserThread::IO)) {
+    StartListeningOnSocket();
+  } else {
+    listen_on_ready_ = true;
+  }
 
   return true;
 }
@@ -1087,6 +1102,6 @@ void ProcessSingleton::KillProcess(int pid) {
   int rv = kill(static_cast<base::ProcessHandle>(pid), SIGKILL);
   // ESRCH = No Such Process (can happen if the other process is already in
   // progress of shutting down and finishes before we try to kill it).
-  DCHECK(rv == 0 || errno == ESRCH) << "Error killing process: "
-                                    << base::safe_strerror(errno);
+  DCHECK(rv == 0 || errno == ESRCH)
+      << "Error killing process: " << base::safe_strerror(errno);
 }

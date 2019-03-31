@@ -5,6 +5,7 @@
 #ifndef ATOM_BROWSER_OSR_OSR_VIEW_PROXY_H_
 #define ATOM_BROWSER_OSR_OSR_VIEW_PROXY_H_
 
+#include <memory>
 #include <set>
 
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -39,13 +40,14 @@ class OffscreenViewProxy {
   void OnEvent(ui::Event* event);
 
   void ResetView() { view_ = nullptr; }
+
  private:
   views::View* view_;
 
   gfx::Rect view_bounds_;
   std::unique_ptr<SkBitmap> view_bitmap_;
 
-  OffscreenViewProxyObserver* observer_;
+  OffscreenViewProxyObserver* observer_ = nullptr;
 };
 
 }  // namespace atom

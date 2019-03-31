@@ -10,6 +10,7 @@
 
 #include "atom/browser/api/trackable_object.h"
 #include "atom/browser/native_browser_view.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "native_mate/handle.h"
 
 namespace gfx {
@@ -29,7 +30,8 @@ namespace api {
 
 class WebContents;
 
-class BrowserView : public mate::TrackableObject<BrowserView> {
+class BrowserView : public mate::TrackableObject<BrowserView>,
+                    public content::WebContentsObserver {
  public:
   static mate::WrappableBase* New(mate::Arguments* args);
 
@@ -47,6 +49,9 @@ class BrowserView : public mate::TrackableObject<BrowserView> {
               const mate::Dictionary& options);
   ~BrowserView() override;
 
+  // content::WebContentsObserver:
+  void WebContentsDestroyed() override;
+
  private:
   void Init(v8::Isolate* isolate,
             v8::Local<v8::Object> wrapper,
@@ -56,10 +61,10 @@ class BrowserView : public mate::TrackableObject<BrowserView> {
   void SetBounds(const gfx::Rect& bounds);
   void SetBackgroundColor(const std::string& color_name);
 
-  v8::Local<v8::Value> WebContents();
+  v8::Local<v8::Value> GetWebContents();
 
   v8::Global<v8::Value> web_contents_;
-  class WebContents* api_web_contents_;
+  class WebContents* api_web_contents_ = nullptr;
 
   std::unique_ptr<NativeBrowserView> view_;
 

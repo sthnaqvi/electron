@@ -5,12 +5,14 @@
 #ifndef ATOM_RENDERER_WEB_WORKER_OBSERVER_H_
 #define ATOM_RENDERER_WEB_WORKER_OBSERVER_H_
 
+#include <memory>
+
 #include "base/macros.h"
 #include "v8/include/v8.h"
 
 namespace atom {
 
-class AtomBindings;
+class ElectronBindings;
 class NodeBindings;
 
 // Watches for WebWorker and insert node integration to it.
@@ -27,7 +29,7 @@ class WebWorkerObserver {
   ~WebWorkerObserver();
 
   std::unique_ptr<NodeBindings> node_bindings_;
-  std::unique_ptr<AtomBindings> atom_bindings_;
+  std::unique_ptr<ElectronBindings> electron_bindings_;
 
   DISALLOW_COPY_AND_ASSIGN(WebWorkerObserver);
 };

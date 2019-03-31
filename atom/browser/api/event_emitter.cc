@@ -5,12 +5,12 @@
 #include "atom/browser/api/event_emitter.h"
 
 #include "atom/browser/api/event.h"
+#include "atom/common/node_includes.h"
+#include "content/public/browser/render_frame_host.h"
 #include "native_mate/arguments.h"
 #include "native_mate/dictionary.h"
 #include "native_mate/object_template_builder.h"
 #include "ui/events/event_constants.h"
-
-#include "atom/common/node_includes.h"
 
 namespace mate {
 
@@ -26,24 +26,26 @@ void PreventDefault(mate::Arguments* args) {
 // Create a pure JavaScript Event object.
 v8::Local<v8::Object> CreateEventObject(v8::Isolate* isolate) {
   if (event_template.IsEmpty()) {
-    event_template.Reset(isolate, ObjectTemplateBuilder(isolate)
-        .SetMethod("preventDefault", &PreventDefault)
-        .Build());
+    event_template.Reset(
+        isolate,
+        ObjectTemplateBuilder(isolate, v8::ObjectTemplate::New(isolate))
+            .SetMethod("preventDefault", &PreventDefault)
+            .Build());
   }
 
-  return v8::Local<v8::ObjectTemplate>::New(
-      isolate, event_template)->NewInstance();
+  return v8::Local<v8::ObjectTemplate>::New(isolate, event_template)
+      ->NewInstance(isolate->GetCurrentContext())
+      .ToLocalChecked();
 }
 
 }  // namespace
 
 namespace internal {
 
-v8::Local<v8::Object> CreateJSEvent(
-    v8::Isolate* isolate,
-    v8::Local<v8::Object> object,
-    content::WebContents* sender,
-    IPC::Message* message) {
+v8::Local<v8::Object> CreateJSEvent(v8::Isolate* isolate,
+                                    v8::Local<v8::Object> object,
+                                    content::RenderFrameHost* sender,
+                                    IPC::Message* message) {
   v8::Local<v8::Object> event;
   bool use_native_event = sender && message;
 
@@ -54,14 +56,16 @@ v8::Local<v8::Object> CreateJSEvent(
   } else {
     event = CreateEventObject(isolate);
   }
-  mate::Dictionary(isolate, event).Set("sender", object);
+  mate::Dictionary dict(isolate, event);
+  dict.Set("sender", object);
+  if (sender)
+    dict.Set("frameId", sender->GetRoutingID());
   return event;
 }
 
-v8::Local<v8::Object> CreateCustomEvent(
-    v8::Isolate* isolate,
-    v8::Local<v8::Object> object,
-    v8::Local<v8::Object> custom_event) {
+v8::Local<v8::Object> CreateCustomEvent(v8::Isolate* isolate,
+                                        v8::Local<v8::Object> object,
+                                        v8::Local<v8::Object> custom_event) {
   v8::Local<v8::Object> event = CreateEventObject(isolate);
   (void)event->SetPrototype(custom_event->CreationContext(), custom_event);
   mate::Dictionary(isolate, event).Set("sender", object);
@@ -74,6 +78,7 @@ v8::Local<v8::Object> CreateEventFromFlags(v8::Isolate* isolate, int flags) {
   obj.Set("ctrlKey", static_cast<bool>(flags & ui::EF_CONTROL_DOWN));
   obj.Set("altKey", static_cast<bool>(flags & ui::EF_ALT_DOWN));
   obj.Set("metaKey", static_cast<bool>(flags & ui::EF_COMMAND_DOWN));
+  obj.Set("triggeredByAccelerator", static_cast<bool>(flags));
   return obj.GetHandle();
 }
 

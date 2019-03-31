@@ -37,6 +37,14 @@ struct Converter<atom::AutoResizeFlags> {
     if (params.Get("height", &height) && height) {
       flags |= atom::kAutoResizeHeight;
     }
+    bool horizontal = false;
+    if (params.Get("horizontal", &horizontal) && horizontal) {
+      flags |= atom::kAutoResizeHorizontal;
+    }
+    bool vertical = false;
+    if (params.Get("vertical", &vertical) && vertical) {
+      flags |= atom::kAutoResizeVertical;
+    }
 
     *auto_resize_flags = static_cast<atom::AutoResizeFlags>(flags);
     return true;
@@ -51,8 +59,7 @@ namespace api {
 
 BrowserView::BrowserView(v8::Isolate* isolate,
                          v8::Local<v8::Object> wrapper,
-                         const mate::Dictionary& options)
-    : api_web_contents_(nullptr) {
+                         const mate::Dictionary& options) {
   Init(isolate, wrapper, options);
 }
 
@@ -67,15 +74,25 @@ void BrowserView::Init(v8::Isolate* isolate,
 
   web_contents_.Reset(isolate, web_contents.ToV8());
   api_web_contents_ = web_contents.get();
+  Observe(web_contents->web_contents());
 
-  view_.reset(NativeBrowserView::Create(
-      api_web_contents_->managed_web_contents()->GetView()));
+  view_.reset(
+      NativeBrowserView::Create(api_web_contents_->managed_web_contents()));
 
   InitWith(isolate, wrapper);
 }
 
 BrowserView::~BrowserView() {
-  api_web_contents_->DestroyWebContents(true /* async */);
+  if (api_web_contents_) {  // destroy() is called
+    // Destroy WebContents asynchronously unless app is shutting down,
+    // because destroy() might be called inside WebContents's event handler.
+    api_web_contents_->DestroyWebContents(!Browser::Get()->is_shutting_down());
+  }
+}
+
+void BrowserView::WebContentsDestroyed() {
+  api_web_contents_ = nullptr;
+  web_contents_.Reset();
 }
 
 // static
@@ -114,7 +131,7 @@ void BrowserView::SetBackgroundColor(const std::string& color_name) {
   view_->SetBackgroundColor(ParseHexColor(color_name));
 }
 
-v8::Local<v8::Value> BrowserView::WebContents() {
+v8::Local<v8::Value> BrowserView::GetWebContents() {
   if (web_contents_.IsEmpty()) {
     return v8::Null(isolate());
   }
@@ -131,7 +148,7 @@ void BrowserView::BuildPrototype(v8::Isolate* isolate,
       .SetMethod("setAutoResize", &BrowserView::SetAutoResize)
       .SetMethod("setBounds", &BrowserView::SetBounds)
       .SetMethod("setBackgroundColor", &BrowserView::SetBackgroundColor)
-      .SetProperty("webContents", &BrowserView::WebContents)
+      .SetProperty("webContents", &BrowserView::GetWebContents)
       .SetProperty("id", &BrowserView::ID);
 }
 
@@ -150,13 +167,17 @@ void Initialize(v8::Local<v8::Object> exports,
   v8::Isolate* isolate = context->GetIsolate();
   BrowserView::SetConstructor(isolate, base::Bind(&BrowserView::New));
 
-  mate::Dictionary browser_view(
-      isolate, BrowserView::GetConstructor(isolate)->GetFunction());
-
+  mate::Dictionary browser_view(isolate, BrowserView::GetConstructor(isolate)
+                                             ->GetFunction(context)
+                                             .ToLocalChecked());
+  browser_view.SetMethod("fromId",
+                         &mate::TrackableObject<BrowserView>::FromWeakMapID);
+  browser_view.SetMethod("getAllViews",
+                         &mate::TrackableObject<BrowserView>::GetAll);
   mate::Dictionary dict(isolate, exports);
   dict.Set("BrowserView", browser_view);
 }
 
 }  // namespace
 
-NODE_MODULE_CONTEXT_AWARE_BUILTIN(atom_browser_browser_view, Initialize)
+NODE_LINKED_MODULE_CONTEXT_AWARE(atom_browser_browser_view, Initialize)

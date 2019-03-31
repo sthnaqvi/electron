@@ -5,6 +5,7 @@
 #ifndef ATOM_BROWSER_UI_WEBUI_PDF_VIEWER_HANDLER_H_
 #define ATOM_BROWSER_UI_WEBUI_PDF_VIEWER_HANDLER_H_
 
+#include <memory>
 #include <string>
 
 #include "atom/browser/web_contents_zoom_controller.h"
@@ -43,11 +44,13 @@ class PdfViewerHandler : public content::WebUIMessageHandler,
   void SetZoom(const base::ListValue* args);
   void GetStrings(const base::ListValue* args);
   void Reload(const base::ListValue* args);
-  void OnZoomLevelChanged(content::WebContents* web_contents, double level,
-      bool is_temporary);
-
+  void OnZoomLevelChanged(content::WebContents* web_contents,
+                          double level,
+                          bool is_temporary);
+  void AddObserver();
+  void RemoveObserver();
   std::unique_ptr<base::Value> initialize_callback_id_;
-  content::StreamInfo* stream_;
+  content::StreamInfo* stream_ = nullptr;
   std::string original_url_;
 
   DISALLOW_COPY_AND_ASSIGN(PdfViewerHandler);

@@ -13,17 +13,16 @@
 #include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
-#include "vendor/crashpad/client/crashpad_client.h"
-#include "vendor/crashpad/client/crashpad_info.h"
-#include "vendor/crashpad/client/settings.h"
+#include "base/threading/thread_restrictions.h"
+#include "crashpad/client/crashpad_client.h"
+#include "crashpad/client/crashpad_info.h"
+#include "crashpad/client/settings.h"
 
 namespace crash_reporter {
 
-CrashReporterMac::CrashReporterMac() {
-}
+CrashReporterMac::CrashReporterMac() {}
 
-CrashReporterMac::~CrashReporterMac() {
-}
+CrashReporterMac::~CrashReporterMac() {}
 
 void CrashReporterMac::InitBreakpad(const std::string& product_name,
                                     const std::string& version,
@@ -44,17 +43,13 @@ void CrashReporterMac::InitBreakpad(const std::string& product_name,
           framework_bundle_path.Append("Resources").Append("crashpad_handler");
 
       std::vector<std::string> args = {
-        "--no-rate-limit",
-        "--no-upload-gzip",  // not all servers accept gzip
+          "--no-rate-limit",
+          "--no-upload-gzip",  // not all servers accept gzip
       };
 
       crashpad::CrashpadClient crashpad_client;
       crashpad_client.StartHandler(handler_path, crashes_dir, crashes_dir,
-                                   submit_url,
-                                   StringMap(),
-                                   args,
-                                   true,
-                                   false);
+                                   submit_url, StringMap(), args, true, false);
     }  // @autoreleasepool
   }
 
@@ -72,12 +67,11 @@ void CrashReporterMac::InitBreakpad(const std::string& product_name,
   SetCrashKeyValue("process_type", is_browser_ ? "browser" : "renderer");
   SetCrashKeyValue("ver", version);
 
-  for (const auto& upload_parameter: upload_parameters_) {
+  for (const auto& upload_parameter : upload_parameters_) {
     SetCrashKeyValue(upload_parameter.first, upload_parameter.second);
   }
   if (is_browser_) {
-    database_ =
-        crashpad::CrashReportDatabase::Initialize(crashes_dir);
+    database_ = crashpad::CrashReportDatabase::Initialize(crashes_dir);
     SetUploadToServer(upload_to_server);
   }
 }
@@ -105,12 +99,13 @@ void CrashReporterMac::SetCrashKeyValue(const base::StringPiece& key,
   simple_string_dictionary_->SetKeyValue(key.data(), value.data());
 }
 
-void CrashReporterMac::SetExtraParameter(const std::string& key,
+void CrashReporterMac::AddExtraParameter(const std::string& key,
                                          const std::string& value) {
-  if (simple_string_dictionary_)
+  if (simple_string_dictionary_) {
     SetCrashKeyValue(key, value);
-  else
+  } else {
     upload_parameters_[key] = value;
+  }
 }
 
 void CrashReporterMac::RemoveExtraParameter(const std::string& key) {
@@ -120,16 +115,34 @@ void CrashReporterMac::RemoveExtraParameter(const std::string& key) {
     upload_parameters_.erase(key);
 }
 
+std::map<std::string, std::string> CrashReporterMac::GetParameters() const {
+  if (simple_string_dictionary_) {
+    std::map<std::string, std::string> ret;
+    crashpad::SimpleStringDictionary::Iterator iter(*simple_string_dictionary_);
+    for (;;) {
+      auto* const entry = iter.Next();
+      if (!entry)
+        break;
+      ret[entry->key] = entry->value;
+    }
+    return ret;
+  }
+  return upload_parameters_;
+}
+
 std::vector<CrashReporter::UploadReportResult>
 CrashReporterMac::GetUploadedReports(const base::FilePath& crashes_dir) {
   std::vector<CrashReporter::UploadReportResult> uploaded_reports;
 
-  if (!base::PathExists(crashes_dir)) {
-    return uploaded_reports;
+  {
+    base::ThreadRestrictions::ScopedAllowIO allow_io;
+    if (!base::PathExists(crashes_dir)) {
+      return uploaded_reports;
+    }
   }
   // Load crashpad database.
   std::unique_ptr<crashpad::CrashReportDatabase> database =
-    crashpad::CrashReportDatabase::Initialize(crashes_dir);
+      crashpad::CrashReportDatabase::Initialize(crashes_dir);
   DCHECK(database);
 
   std::vector<crashpad::CrashReportDatabase::Report> completed_reports;
@@ -149,7 +162,9 @@ CrashReporterMac::GetUploadedReports(const base::FilePath& crashes_dir) {
   }
 
   auto sort_by_time = [](const UploadReportResult& a,
-      const UploadReportResult& b) {return a.first >= b.first;};
+                         const UploadReportResult& b) {
+    return a.first >= b.first;
+  };
   std::sort(uploaded_reports.begin(), uploaded_reports.end(), sort_by_time);
   return uploaded_reports;
 }

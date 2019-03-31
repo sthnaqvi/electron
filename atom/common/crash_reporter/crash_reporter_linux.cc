@@ -17,8 +17,9 @@
 #include "base/logging.h"
 #include "base/memory/singleton.h"
 #include "base/process/memory.h"
-#include "vendor/breakpad/src/client/linux/handler/exception_handler.h"
-#include "vendor/breakpad/src/common/linux/linux_libc_support.h"
+#include "base/threading/thread_restrictions.h"
+#include "breakpad/src/client/linux/handler/exception_handler.h"
+#include "breakpad/src/common/linux/linux_libc_support.h"
 
 using google_breakpad::ExceptionHandler;
 using google_breakpad::MinidumpDescriptor;
@@ -27,8 +28,6 @@ namespace crash_reporter {
 
 namespace {
 
-static const size_t kDistroSize = 128;
-
 // Define a preferred limit on minidump sizes, because Crash Server currently
 // throws away any larger than 1.2MB (1.2 * 1024 * 1024).  A value of -1 means
 // no limit.
@@ -36,10 +35,7 @@ static const off_t kMaxMinidumpFileSize = 1258291;
 
 }  // namespace
 
-CrashReporterLinux::CrashReporterLinux()
-    : process_start_time_(0),
-      pid_(getpid()),
-      upload_to_server_(true) {
+CrashReporterLinux::CrashReporterLinux() : pid_(getpid()) {
   // Set the base process start time value.
   struct timeval tv;
   if (!gettimeofday(&tv, NULL)) {
@@ -53,8 +49,7 @@ CrashReporterLinux::CrashReporterLinux()
   base::SetLinuxDistro(base::GetLinuxDistro());
 }
 
-CrashReporterLinux::~CrashReporterLinux() {
-}
+CrashReporterLinux::~CrashReporterLinux() {}
 
 void CrashReporterLinux::InitBreakpad(const std::string& product_name,
                                       const std::string& version,
@@ -90,21 +85,20 @@ bool CrashReporterLinux::GetUploadToServer() {
 }
 
 void CrashReporterLinux::EnableCrashDumping(const base::FilePath& crashes_dir) {
-  base::CreateDirectory(crashes_dir);
-
+  {
+    base::ThreadRestrictions::ScopedAllowIO allow_io;
+    base::CreateDirectory(crashes_dir);
+  }
   std::string log_file = crashes_dir.Append("uploads.log").value();
   strncpy(g_crash_log_path, log_file.c_str(), sizeof(g_crash_log_path));
 
   MinidumpDescriptor minidump_descriptor(crashes_dir.value());
   minidump_descriptor.set_size_limit(kMaxMinidumpFileSize);
 
-  breakpad_.reset(new ExceptionHandler(
-      minidump_descriptor,
-      NULL,
-      CrashDone,
-      this,
-      true,  // Install handlers.
-      -1));
+  breakpad_.reset(new ExceptionHandler(minidump_descriptor, NULL, CrashDone,
+                                       this,
+                                       true,  // Install handlers.
+                                       -1));
 }
 
 bool CrashReporterLinux::CrashDone(const MinidumpDescriptor& minidump,

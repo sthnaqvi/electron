@@ -10,10 +10,10 @@
 #include "base/memory/weak_ptr.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "content/public/renderer/render_view_observer.h"
-#include "third_party/WebKit/public/web/WebAutofillClient.h"
-#include "third_party/WebKit/public/web/WebFormControlElement.h"
-#include "third_party/WebKit/public/web/WebInputElement.h"
-#include "third_party/WebKit/public/web/WebNode.h"
+#include "third_party/blink/public/web/web_autofill_client.h"
+#include "third_party/blink/public/web/web_form_control_element.h"
+#include "third_party/blink/public/web/web_input_element.h"
+#include "third_party/blink/public/web/web_node.h"
 
 namespace atom {
 
@@ -21,28 +21,18 @@ class AutofillAgent : public content::RenderFrameObserver,
                       public blink::WebAutofillClient {
  public:
   explicit AutofillAgent(content::RenderFrame* frame);
+  ~AutofillAgent() override;
 
   // content::RenderFrameObserver:
   void OnDestruct() override;
 
   void DidChangeScrollOffset() override;
   void FocusedNodeChanged(const blink::WebNode&) override;
+  void DidCompleteFocusChangeInFrame() override;
+  void DidReceiveLeftMouseDownOrGestureTapInNode(
+      const blink::WebNode&) override;
 
  private:
-  class Helper : public content::RenderViewObserver {
-   public:
-    explicit Helper(AutofillAgent* agent);
-
-    // content::RenderViewObserver implementation.
-    void OnDestruct() override {}
-    void OnMouseDown(const blink::WebNode&) override;
-    void FocusChangeComplete() override;
-
-   private:
-    AutofillAgent* agent_;
-  };
-  friend class Helper;
-
   struct ShowSuggestionsOptions {
     ShowSuggestionsOptions();
     bool autofill_on_empty_values;
@@ -52,13 +42,13 @@ class AutofillAgent : public content::RenderFrameObserver,
   bool OnMessageReceived(const IPC::Message& message) override;
 
   // blink::WebAutofillClient:
-  void textFieldDidEndEditing(const blink::WebInputElement&) override;
-  void textFieldDidChange(const blink::WebFormControlElement&) override;
-  void textFieldDidChangeImpl(const blink::WebFormControlElement&);
-  void textFieldDidReceiveKeyDown(const blink::WebInputElement&,
+  void TextFieldDidEndEditing(const blink::WebInputElement&) override;
+  void TextFieldDidChange(const blink::WebFormControlElement&) override;
+  void TextFieldDidChangeImpl(const blink::WebFormControlElement&);
+  void TextFieldDidReceiveKeyDown(const blink::WebInputElement&,
                                   const blink::WebKeyboardEvent&) override;
-  void openTextDataListChooser(const blink::WebInputElement&) override;
-  void dataListOptionsChanged(const blink::WebInputElement&) override;
+  void OpenTextDataListChooser(const blink::WebInputElement&) override;
+  void DataListOptionsChanged(const blink::WebInputElement&) override;
 
   bool IsUserGesture() const;
   void HidePopup();
@@ -71,15 +61,13 @@ class AutofillAgent : public content::RenderFrameObserver,
 
   void DoFocusChangeComplete();
 
-  std::unique_ptr<Helper> helper_;
-
   // True when the last click was on the focused node.
-  bool focused_node_was_last_clicked_;
+  bool focused_node_was_last_clicked_ = false;
 
   // This is set to false when the focus changes, then set back to true soon
   // afterwards. This helps track whether an event happened after a node was
   // already focused, or if it caused the focus to change.
-  bool was_focused_before_now_;
+  bool was_focused_before_now_ = false;
 
   base::WeakPtrFactory<AutofillAgent> weak_ptr_factory_;
 

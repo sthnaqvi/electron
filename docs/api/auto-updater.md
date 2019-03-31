@@ -4,24 +4,15 @@
 
 Process: [Main](../glossary.md#main-process)
 
-The `autoUpdater` module provides an interface for the
-[Squirrel](https://github.com/Squirrel) framework.
+**See also: [A detailed guide about how to implement updates in your application](../tutorial/updates.md).**
 
-You can quickly launch a multi-platform release server for distributing your
-application by using one of these projects:
+## Platform Notices
 
-- [nuts][nuts]: *A smart release server for your applications, using GitHub as a backend. Auto-updates with Squirrel (Mac & Windows)*
-- [electron-release-server][electron-release-server]: *A fully featured,
-  self-hosted release server for electron applications, compatible with
-  auto-updater*
-- [squirrel-updates-server][squirrel-updates-server]: *A simple node.js server
-  for Squirrel.Mac and Squirrel.Windows which uses GitHub releases*
-- [squirrel-release-server][squirrel-release-server]: *A simple PHP application for Squirrel.Windows which reads updates from a folder. Supports delta updates.*
+Currently, only macOS and Windows are supported. There is no built-in support
+for auto-updater on Linux, so it is recommended to use the
+distribution's package manager to update your app.
 
-## Platform notices
-
-Though `autoUpdater` provides a uniform API for different platforms, there are
-still some subtle differences on each platform.
+In addition, there are some subtle differences on each platform:
 
 ### macOS
 
@@ -53,11 +44,6 @@ not be able to pin your app properly in task bar.
 Unlike Squirrel.Mac, Windows can host updates on S3 or any other static file host.
 You can read the documents of [Squirrel.Windows][squirrel-windows] to get more details
 about how Squirrel.Windows works.
-
-### Linux
-
-There is no built-in support for auto-updater on Linux, so it is recommended to
-use the distribution's package manager to update your app.
 
 ## Events
 
@@ -98,14 +84,26 @@ Emitted when an update has been downloaded.
 
 On Windows only `releaseName` is available.
 
+**Note:** It is not strictly necessary to handle this event. A successfully
+downloaded update will still be applied the next time the application starts.
+
+### Event: 'before-quit-for-update'
+
+This event is emitted after a user calls `quitAndInstall()`.
+
+When this API is called, the `before-quit` event is not emitted before all windows are closed. As a result you should listen to this event if you wish to perform actions before the windows are closed while a process is quitting, as well as listening to `before-quit`.
+
 ## Methods
 
 The `autoUpdater` object has the following methods:
 
-### `autoUpdater.setFeedURL(url[, requestHeaders])`
+### `autoUpdater.setFeedURL(options)`
 
-* `url` String
-* `requestHeaders` Object _macOS_ (optional) - HTTP request headers.
+* `options` Object
+  * `url` String
+  * `headers` Object (optional) _macOS_ - HTTP request headers.
+  * `serverType` String (optional) _macOS_ - Either `json` or `default`, see the [Squirrel.Mac][squirrel-mac]
+    README for more information.
 
 Sets the `url` and initialize the auto updater.
 
@@ -123,9 +121,13 @@ using this API.
 Restarts the app and installs the update after it has been downloaded. It
 should only be called after `update-downloaded` has been emitted.
 
-**Note:** `autoUpdater.quitAndInstall()` will close all application windows
-first and only emit `before-quit` event on `app` after that. This is different
-from the normal quit event sequence.
+Under the hood calling `autoUpdater.quitAndInstall()` will close all application
+windows first, and automatically call `app.quit()` after all windows have been
+closed.
+
+**Note:** It is not strictly necessary to call this function to apply an update,
+as a successfully downloaded update will always be applied the next time the
+application starts.
 
 [squirrel-mac]: https://github.com/Squirrel/Squirrel.Mac
 [server-support]: https://github.com/Squirrel/Squirrel.Mac#server-support
@@ -134,7 +136,3 @@ from the normal quit event sequence.
 [installer-lib]: https://github.com/electron/windows-installer
 [electron-forge-lib]: https://github.com/electron-userland/electron-forge
 [app-user-model-id]: https://msdn.microsoft.com/en-us/library/windows/desktop/dd378459(v=vs.85).aspx
-[electron-release-server]: https://github.com/ArekSredzki/electron-release-server
-[squirrel-updates-server]: https://github.com/Aluxian/squirrel-updates-server
-[nuts]: https://github.com/GitbookIO/nuts
-[squirrel-release-server]: https://github.com/Arcath/squirrel-release-server

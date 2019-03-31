@@ -5,25 +5,31 @@
 #include "atom/browser/web_dialog_helper.h"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "atom/browser/atom_browser_context.h"
 #include "atom/browser/native_window.h"
 #include "atom/browser/ui/file_dialog.h"
+#include "atom/common/native_mate_converters/callback.h"
 #include "base/bind.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/file_chooser_file_info.h"
-#include "content/public/common/file_chooser_params.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "net/base/mime_util.h"
 #include "ui/shell_dialogs/selected_file_info.h"
+
+using blink::mojom::FileChooserFileInfo;
+using blink::mojom::FileChooserFileInfoPtr;
+using blink::mojom::FileChooserParams;
 
 namespace {
 
@@ -31,21 +37,36 @@ class FileSelectHelper : public base::RefCounted<FileSelectHelper>,
                          public content::WebContentsObserver {
  public:
   FileSelectHelper(content::RenderFrameHost* render_frame_host,
-                   const content::FileChooserParams::Mode& mode)
-      : render_frame_host_(render_frame_host), mode_(mode) {
-    auto web_contents = content::WebContents::FromRenderFrameHost(
-        render_frame_host);
+                   std::unique_ptr<content::FileSelectListener> listener,
+                   blink::mojom::FileChooserParams::Mode mode)
+      : render_frame_host_(render_frame_host),
+        listener_(std::move(listener)),
+        mode_(mode) {
+    auto* web_contents =
+        content::WebContents::FromRenderFrameHost(render_frame_host);
     content::WebContentsObserver::Observe(web_contents);
   }
 
   void ShowOpenDialog(const file_dialog::DialogSettings& settings) {
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    atom::util::Promise promise(isolate);
+
+    file_dialog::ShowOpenDialog(settings, std::move(promise));
     auto callback = base::Bind(&FileSelectHelper::OnOpenDialogDone, this);
-    file_dialog::ShowOpenDialog(settings, callback);
+    ignore_result(promise.Then(callback));
   }
 
   void ShowSaveDialog(const file_dialog::DialogSettings& settings) {
-    auto callback = base::Bind(&FileSelectHelper::OnSaveDialogDone, this);
-    file_dialog::ShowSaveDialog(settings, callback);
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    v8::Local<v8::Context> context = isolate->GetCurrentContext();
+    atom::util::Promise promise(isolate);
+    v8::Local<v8::Promise> handle = promise.GetHandle();
+
+    file_dialog::ShowSaveDialog(settings, std::move(promise));
+    ignore_result(handle->Then(
+        context,
+        v8::Local<v8::Function>::Cast(mate::ConvertToV8(
+            isolate, base::Bind(&FileSelectHelper::OnSaveDialogDone, this)))));
   }
 
  private:
@@ -53,41 +74,56 @@ class FileSelectHelper : public base::RefCounted<FileSelectHelper>,
 
   ~FileSelectHelper() override {}
 
-  void OnOpenDialogDone(bool result, const std::vector<base::FilePath>& paths) {
-    std::vector<content::FileChooserFileInfo> file_info;
+#if defined(MAS_BUILD)
+  void OnOpenDialogDone(bool result,
+                        const std::vector<base::FilePath>& paths,
+                        const std::vector<std::string>& bookmarks)
+#else
+  void OnOpenDialogDone(bool result, const std::vector<base::FilePath>& paths)
+#endif
+  {
+    std::vector<FileChooserFileInfoPtr> file_info;
     if (result) {
       for (auto& path : paths) {
-        content::FileChooserFileInfo info;
-        info.file_path = path;
-        info.display_name = path.BaseName().value();
-        file_info.push_back(info);
+        file_info.push_back(FileChooserFileInfo::NewNativeFile(
+            blink::mojom::NativeFileInfo::New(
+                path, path.BaseName().AsUTF16Unsafe())));
       }
 
       if (render_frame_host_ && !paths.empty()) {
-        auto browser_context = static_cast<atom::AtomBrowserContext*>(
+        auto* browser_context = static_cast<atom::AtomBrowserContext*>(
             render_frame_host_->GetProcess()->GetBrowserContext());
         browser_context->prefs()->SetFilePath(prefs::kSelectFileLastDirectory,
                                               paths[0].DirName());
       }
     }
-    OnFilesSelected(file_info);
+    OnFilesSelected(std::move(file_info));
   }
 
-  void OnSaveDialogDone(bool result, const base::FilePath& path) {
-    std::vector<content::FileChooserFileInfo> file_info;
+#if defined(MAS_BUILD)
+  void OnSaveDialogDone(bool result,
+                        const base::FilePath& path,
+                        const std::string& bookmark)
+#else
+  void OnSaveDialogDone(bool result, const base::FilePath& path)
+#endif
+  {
+    std::vector<FileChooserFileInfoPtr> file_info;
     if (result) {
-      content::FileChooserFileInfo info;
-      info.file_path = path;
-      info.display_name = path.BaseName().value();
-      file_info.push_back(info);
+      file_info.push_back(
+          FileChooserFileInfo::NewNativeFile(blink::mojom::NativeFileInfo::New(
+              path, path.BaseName().AsUTF16Unsafe())));
     }
-    OnFilesSelected(file_info);
+    OnFilesSelected(std::move(file_info));
   }
 
-  void OnFilesSelected(
-      const std::vector<content::FileChooserFileInfo>& file_info) {
-    if (render_frame_host_)
-      render_frame_host_->FilesSelectedInChooser(file_info, mode_);
+  void OnFilesSelected(std::vector<FileChooserFileInfoPtr> file_info) {
+    if (listener_) {
+      listener_->FileSelected(std::move(file_info), base::FilePath(), mode_);
+      listener_.reset();
+    }
+    render_frame_host_ = nullptr;
+    Release();
   }
 
   // content::WebContentsObserver:
@@ -104,12 +140,11 @@ class FileSelectHelper : public base::RefCounted<FileSelectHelper>,
   }
 
   // content::WebContentsObserver:
-  void WebContentsDestroyed() override {
-    render_frame_host_ = nullptr;
-  }
+  void WebContentsDestroyed() override { render_frame_host_ = nullptr; }
 
   content::RenderFrameHost* render_frame_host_;
-  content::FileChooserParams::Mode mode_;
+  std::unique_ptr<content::FileSelectListener> listener_;
+  blink::mojom::FileChooserParams::Mode mode_;
 };
 
 file_dialog::Filters GetFileTypesFromAcceptType(
@@ -130,8 +165,8 @@ file_dialog::Filters GetFileTypesFromAcceptType(
     if (ascii_type[0] == '.') {
       // If the type starts with a period it is assumed to be a file extension,
       // like `.txt`, // so we just have to add it to the list.
-      base::FilePath::StringType extension(
-          ascii_type.begin(), ascii_type.end());
+      base::FilePath::StringType extension(ascii_type.begin(),
+                                           ascii_type.end());
       // Skip the first character.
       extensions.push_back(extension.substr(1));
     } else {
@@ -156,10 +191,10 @@ file_dialog::Filters GetFileTypesFromAcceptType(
 
   filters.push_back(file_dialog::Filter());
 
-  if (valid_type_count > 1 ||
-      (valid_type_count == 1 && description.empty() && extensions.size() > 1))
+  if (valid_type_count > 1 || (valid_type_count == 1 && description.empty()))
     description = "Custom Files";
 
+  DCHECK(!description.empty());
   filters[0].first = description;
 
   for (const auto& extension : extensions) {
@@ -182,73 +217,70 @@ file_dialog::Filters GetFileTypesFromAcceptType(
 
 namespace atom {
 
-WebDialogHelper::WebDialogHelper(NativeWindow* window)
-    : window_(window),
-      weak_factory_(this) {
-}
+WebDialogHelper::WebDialogHelper(NativeWindow* window, bool offscreen)
+    : window_(window), offscreen_(offscreen), weak_factory_(this) {}
 
-WebDialogHelper::~WebDialogHelper() {
-}
-
+WebDialogHelper::~WebDialogHelper() {}
 
 void WebDialogHelper::RunFileChooser(
     content::RenderFrameHost* render_frame_host,
-    const content::FileChooserParams& params) {
-  std::vector<content::FileChooserFileInfo> result;
-
+    std::unique_ptr<content::FileSelectListener> listener,
+    const blink::mojom::FileChooserParams& params) {
   file_dialog::DialogSettings settings;
+  settings.force_detached = offscreen_;
   settings.filters = GetFileTypesFromAcceptType(params.accept_types);
   settings.parent_window = window_;
   settings.title = base::UTF16ToUTF8(params.title);
 
-  scoped_refptr<FileSelectHelper> file_select_helper(
-      new FileSelectHelper(render_frame_host, params.mode));
-  if (params.mode == content::FileChooserParams::Save) {
+  scoped_refptr<FileSelectHelper> file_select_helper(new FileSelectHelper(
+      render_frame_host, std::move(listener), params.mode));
+  if (params.mode == FileChooserParams::Mode::kSave) {
     settings.default_path = params.default_file_name;
     file_select_helper->ShowSaveDialog(settings);
   } else {
     int flags = file_dialog::FILE_DIALOG_CREATE_DIRECTORY;
     switch (params.mode) {
-      case content::FileChooserParams::OpenMultiple:
+      case FileChooserParams::Mode::kOpenMultiple:
         flags |= file_dialog::FILE_DIALOG_MULTI_SELECTIONS;
-      case content::FileChooserParams::Open:
+        FALLTHROUGH;
+      case FileChooserParams::Mode::kOpen:
         flags |= file_dialog::FILE_DIALOG_OPEN_FILE;
+        flags |= file_dialog::FILE_DIALOG_TREAT_PACKAGE_APP_AS_DIRECTORY;
         break;
-      case content::FileChooserParams::UploadFolder:
+      case FileChooserParams::Mode::kUploadFolder:
         flags |= file_dialog::FILE_DIALOG_OPEN_DIRECTORY;
         break;
       default:
         NOTREACHED();
     }
 
-    AtomBrowserContext* browser_context = static_cast<AtomBrowserContext*>(
-        window_->web_contents()->GetBrowserContext());
-    if (!browser_context) {
-      browser_context = static_cast<atom::AtomBrowserContext*>(
-          render_frame_host->GetProcess()->GetBrowserContext());
-    }
-    settings.default_path = browser_context->prefs()->GetFilePath(
-        prefs::kSelectFileLastDirectory).Append(params.default_file_name);
+    auto* browser_context = static_cast<atom::AtomBrowserContext*>(
+        render_frame_host->GetProcess()->GetBrowserContext());
+    settings.default_path = browser_context->prefs()
+                                ->GetFilePath(prefs::kSelectFileLastDirectory)
+                                .Append(params.default_file_name);
     settings.properties = flags;
     file_select_helper->ShowOpenDialog(settings);
   }
 }
 
-void WebDialogHelper::EnumerateDirectory(content::WebContents* web_contents,
-                                         int request_id,
-                                         const base::FilePath& dir) {
-  int types = base::FileEnumerator::FILES |
-              base::FileEnumerator::DIRECTORIES |
+void WebDialogHelper::EnumerateDirectory(
+    content::WebContents* web_contents,
+    std::unique_ptr<content::FileSelectListener> listener,
+    const base::FilePath& dir) {
+  int types = base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES |
               base::FileEnumerator::INCLUDE_DOT_DOT;
   base::FileEnumerator file_enum(dir, false, types);
 
   base::FilePath path;
-  std::vector<base::FilePath> paths;
-  while (!(path = file_enum.Next()).empty())
-    paths.push_back(path);
+  std::vector<FileChooserFileInfoPtr> file_info;
+  while (!(path = file_enum.Next()).empty()) {
+    file_info.push_back(FileChooserFileInfo::NewNativeFile(
+        blink::mojom::NativeFileInfo::New(path, base::string16())));
+  }
 
-  web_contents->GetRenderViewHost()->DirectoryEnumerationFinished(
-      request_id, paths);
+  listener->FileSelected(std::move(file_info), dir,
+                         FileChooserParams::Mode::kUploadFolder);
 }
 
 }  // namespace atom

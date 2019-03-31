@@ -8,26 +8,26 @@ namespace atom {
 
 namespace options {
 
-const char kTitle[]          = "title";
-const char kIcon[]           = "icon";
-const char kFrame[]          = "frame";
-const char kShow[]           = "show";
-const char kCenter[]         = "center";
-const char kX[]              = "x";
-const char kY[]              = "y";
-const char kWidth[]          = "width";
-const char kHeight[]         = "height";
-const char kMinWidth[]       = "minWidth";
-const char kMinHeight[]      = "minHeight";
-const char kMaxWidth[]       = "maxWidth";
-const char kMaxHeight[]      = "maxHeight";
-const char kResizable[]      = "resizable";
-const char kMovable[]        = "movable";
-const char kMinimizable[]    = "minimizable";
-const char kMaximizable[]    = "maximizable";
+const char kTitle[] = "title";
+const char kIcon[] = "icon";
+const char kFrame[] = "frame";
+const char kShow[] = "show";
+const char kCenter[] = "center";
+const char kX[] = "x";
+const char kY[] = "y";
+const char kWidth[] = "width";
+const char kHeight[] = "height";
+const char kMinWidth[] = "minWidth";
+const char kMinHeight[] = "minHeight";
+const char kMaxWidth[] = "maxWidth";
+const char kMaxHeight[] = "maxHeight";
+const char kResizable[] = "resizable";
+const char kMovable[] = "movable";
+const char kMinimizable[] = "minimizable";
+const char kMaximizable[] = "maximizable";
 const char kFullScreenable[] = "fullscreenable";
-const char kClosable[]       = "closable";
-const char kFullscreen[]     = "fullscreen";
+const char kClosable[] = "closable";
+const char kFullscreen[] = "fullscreen";
 
 // Whether the window should show in taskbar.
 const char kSkipTaskbar[] = "skipTaskbar";
@@ -35,6 +35,8 @@ const char kSkipTaskbar[] = "skipTaskbar";
 // Start with the kiosk mode, see Opera's page for description:
 // http://www.opera.com/support/mastering/kiosk/
 const char kKiosk[] = "kiosk";
+
+const char kSimpleFullScreen[] = "simpleFullscreen";
 
 // Make windows stays on the top of all other windows.
 const char kAlwaysOnTop[] = "alwaysOnTop";
@@ -84,6 +86,9 @@ const char kBackgroundColor[] = "backgroundColor";
 // Whether the window should have a shadow.
 const char kHasShadow[] = "hasShadow";
 
+// Browser window opacity
+const char kOpacity[] = "opacity";
+
 // Whether the window can be activated.
 const char kFocusable[] = "focusable";
 
@@ -105,6 +110,9 @@ const char kPreloadURL[] = "preloadURL";
 // Enable the node integration.
 const char kNodeIntegration[] = "nodeIntegration";
 
+// Enable the remote module
+const char kEnableRemoteModule[] = "enableRemoteModule";
+
 // Enable context isolation of Electron APIs and preload script
 const char kContextIsolation[] = "contextIsolation";
 
@@ -112,8 +120,7 @@ const char kContextIsolation[] = "contextIsolation";
 const char kGuestInstanceID[] = "guestInstanceId";
 
 // Web runtime features.
-const char kExperimentalFeatures[]       = "experimentalFeatures";
-const char kExperimentalCanvasFeatures[] = "experimentalCanvasFeatures";
+const char kExperimentalFeatures[] = "experimentalFeatures";
 
 // Opener window's ID.
 const char kOpenerID[] = "openerId";
@@ -122,8 +129,7 @@ const char kOpenerID[] = "openerId";
 const char kScrollBounce[] = "scrollBounce";
 
 // Enable blink features.
-// TODO(kevinsawicki) Rename to enableBlinkFeatures in 2.0
-const char kBlinkFeatures[] = "blinkFeatures";
+const char kEnableBlinkFeatures[] = "enableBlinkFeatures";
 
 // Disable blink features.
 const char kDisableBlinkFeatures[] = "disableBlinkFeatures";
@@ -134,15 +140,32 @@ const char kNodeIntegrationInWorker[] = "nodeIntegrationInWorker";
 // Enable the web view tag.
 const char kWebviewTag[] = "webviewTag";
 
+const char kNativeWindowOpen[] = "nativeWindowOpen";
+
+const char kCustomArgs[] = "additionalArguments";
+
+const char kPlugins[] = "plugins";
+
+const char kSandbox[] = "sandbox";
+
+const char kWebSecurity[] = "webSecurity";
+
+const char kAllowRunningInsecureContent[] = "allowRunningInsecureContent";
+
+const char kOffscreen[] = "offscreen";
+
+const char kNodeIntegrationInSubFrames[] = "nodeIntegrationInSubFrames";
+
+// Disable window resizing when HTML Fullscreen API is activated.
+const char kDisableHtmlFullscreenWindowResize[] =
+    "disableHtmlFullscreenWindowResize";
+
 }  // namespace options
 
 namespace switches {
 
 // Enable chromium sandbox.
 const char kEnableSandbox[] = "enable-sandbox";
-
-// Enable sandbox in only remote content windows.
-const char kEnableMixedSandbox[] = "enable-mixed-sandbox";
 
 // Enable plugins.
 const char kEnablePlugins[] = "enable-plugins";
@@ -160,10 +183,19 @@ const char kDisableHttpCache[] = "disable-http-cache";
 const char kStandardSchemes[] = "standard-schemes";
 
 // Register schemes to handle service worker.
-const char kRegisterServiceWorkerSchemes[] = "register-service-worker-schemes";
+const char kServiceWorkerSchemes[] = "service-worker-schemes";
 
 // Register schemes as secure.
 const char kSecureSchemes[] = "secure-schemes";
+
+// Register schemes as bypassing CSP.
+const char kBypassCSPSchemes[] = "bypasscsp-schemes";
+
+// Register schemes as support fetch API.
+const char kFetchSchemes[] = "fetch-schemes";
+
+// Register schemes as CORS enabled.
+const char kCORSSchemes[] = "cors-schemes";
 
 // The browser process app model ID
 const char kAppUserModelId[] = "app-user-model-id";
@@ -172,26 +204,48 @@ const char kAppUserModelId[] = "app-user-model-id";
 const char kAppPath[] = "app-path";
 
 // The command line switch versions of the options.
-const char kBackgroundColor[]  = "background-color";
-const char kPreloadScript[]    = "preload";
-const char kPreloadURL[]       = "preload-url";
-const char kNodeIntegration[]  = "node-integration";
+const char kBackgroundColor[] = "background-color";
+const char kPreloadScript[] = "preload";
+const char kPreloadScripts[] = "preload-scripts";
+const char kNodeIntegration[] = "node-integration";
+const char kDisableRemoteModule[] = "disable-remote-module";
 const char kContextIsolation[] = "context-isolation";
-const char kGuestInstanceID[]  = "guest-instance-id";
-const char kOpenerID[]         = "opener-id";
-const char kScrollBounce[]     = "scroll-bounce";
-const char kHiddenPage[]       = "hidden-page";
+const char kGuestInstanceID[] = "guest-instance-id";
+const char kOpenerID[] = "opener-id";
+const char kScrollBounce[] = "scroll-bounce";
+const char kHiddenPage[] = "hidden-page";
 const char kNativeWindowOpen[] = "native-window-open";
-const char kWebviewTag[]       = "webview-tag";
+const char kWebviewTag[] = "webview-tag";
 
 // Command switch passed to renderer process to control nodeIntegration.
-const char kNodeIntegrationInWorker[]  = "node-integration-in-worker";
+const char kNodeIntegrationInWorker[] = "node-integration-in-worker";
+
+// Command switch passed to renderer process to control whether node
+// environments will be created in sub-frames.
+const char kNodeIntegrationInSubFrames[] = "node-integration-in-subframes";
+
+// Disable window resizing when HTML Fullscreen API is activated.
+const char kDisableHtmlFullscreenWindowResize[] =
+    "disable-html-fullscreen-window-resize";
 
 // Widevine options
 // Path to Widevine CDM binaries.
 const char kWidevineCdmPath[] = "widevine-cdm-path";
 // Widevine CDM version.
 const char kWidevineCdmVersion[] = "widevine-cdm-version";
+
+// Forces the maximum disk space to be used by the disk cache, in bytes.
+const char kDiskCacheSize[] = "disk-cache-size";
+
+// Ignore the limit of 6 connections per host.
+const char kIgnoreConnectionsLimit[] = "ignore-connections-limit";
+
+// Whitelist containing servers for which Integrated Authentication is enabled.
+const char kAuthServerWhitelist[] = "auth-server-whitelist";
+
+// Whitelist containing servers for which Kerberos delegation is allowed.
+const char kAuthNegotiateDelegateWhitelist[] =
+    "auth-negotiate-delegate-whitelist";
 
 }  // namespace switches
 

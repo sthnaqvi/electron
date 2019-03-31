@@ -9,19 +9,27 @@
 #include "atom/browser/mac/dict_util.h"
 #include "atom/browser/native_window.h"
 #include "atom/browser/window_list.h"
+#include "atom/common/application_info.h"
+#include "atom/common/platform_util.h"
+#include "atom/common/promise_util.h"
 #include "base/mac/bundle_locations.h"
 #include "base/mac/foundation_util.h"
 #include "base/mac/mac_util.h"
+#include "base/mac/scoped_cftyperef.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/sys_string_conversions.h"
-#include "brightray/common/application_info.h"
 #include "net/base/mac/url_conversions.h"
+#include "ui/gfx/image/image.h"
 #include "url/gurl.h"
 
 namespace atom {
 
+void Browser::SetShutdownHandler(base::Callback<bool()> handler) {
+  [[AtomApplication sharedApplication] setShutdownHandler:std::move(handler)];
+}
+
 void Browser::Focus() {
-  [[AtomApplication sharedApplication] activateIgnoringOtherApps:YES];
+  [[AtomApplication sharedApplication] activateIgnoringOtherApps:NO];
 }
 
 void Browser::Hide() {
@@ -65,11 +73,16 @@ bool Browser::RemoveAsDefaultProtocolClient(const std::string& protocol,
   // Apple's defaults first, so we'll use the first option that isn't our bundle
   CFStringRef other = nil;
   for (CFIndex i = 0; i < CFArrayGetCount(bundleList); ++i) {
-    other = base::mac::CFCast<CFStringRef>(CFArrayGetValueAtIndex(bundleList,
-                                                                  i));
-    if (![identifier isEqualToString: (__bridge NSString *)other]) {
+    other =
+        base::mac::CFCast<CFStringRef>(CFArrayGetValueAtIndex(bundleList, i));
+    if (![identifier isEqualToString:(__bridge NSString*)other]) {
       break;
     }
+  }
+
+  // No other app was found set it to none instead of setting it back to itself.
+  if ([identifier isEqualToString:(__bridge NSString*)other]) {
+    other = base::mac::NSToCFCast(@"None");
   }
 
   OSStatus return_code = LSSetDefaultHandlerForURLScheme(protocol_cf, other);
@@ -86,9 +99,8 @@ bool Browser::SetAsDefaultProtocolClient(const std::string& protocol,
     return false;
 
   NSString* protocol_ns = [NSString stringWithUTF8String:protocol.c_str()];
-  OSStatus return_code =
-      LSSetDefaultHandlerForURLScheme(base::mac::NSToCFCast(protocol_ns),
-                                      base::mac::NSToCFCast(identifier));
+  OSStatus return_code = LSSetDefaultHandlerForURLScheme(
+      base::mac::NSToCFCast(protocol_ns), base::mac::NSToCFCast(identifier));
   return return_code == noErr;
 }
 
@@ -103,22 +115,20 @@ bool Browser::IsDefaultProtocolClient(const std::string& protocol,
 
   NSString* protocol_ns = [NSString stringWithUTF8String:protocol.c_str()];
 
-  CFStringRef bundle =
-      LSCopyDefaultHandlerForURLScheme(base::mac::NSToCFCast(protocol_ns));
-  NSString* bundleId = static_cast<NSString*>(
-      base::mac::CFTypeRefToNSObjectAutorelease(bundle));
+  base::ScopedCFTypeRef<CFStringRef> bundleId(
+      LSCopyDefaultHandlerForURLScheme(base::mac::NSToCFCast(protocol_ns)));
+
   if (!bundleId)
     return false;
 
   // Ensure the comparison is case-insensitive
   // as LS does not persist the case of the bundle id.
   NSComparisonResult result =
-      [bundleId caseInsensitiveCompare:identifier];
+      [base::mac::CFToNSCast(bundleId) caseInsensitiveCompare:identifier];
   return result == NSOrderedSame;
 }
 
-void Browser::SetAppUserModelID(const base::string16& name) {
-}
+void Browser::SetAppUserModelID(const base::string16& name) {}
 
 bool Browser::SetBadgeCount(int count) {
   DockSetBadgeText(count != 0 ? base::IntToString(count) : "");
@@ -144,6 +154,30 @@ std::string Browser::GetCurrentActivityType() {
   return base::SysNSStringToUTF8(userActivity.activityType);
 }
 
+void Browser::InvalidateCurrentActivity() {
+  [[AtomApplication sharedApplication] invalidateCurrentActivity];
+}
+
+void Browser::UpdateCurrentActivity(const std::string& type,
+                                    const base::DictionaryValue& user_info) {
+  [[AtomApplication sharedApplication]
+      updateCurrentActivity:base::SysUTF8ToNSString(type)
+               withUserInfo:DictionaryValueToNSDictionary(user_info)];
+}
+
+bool Browser::WillContinueUserActivity(const std::string& type) {
+  bool prevent_default = false;
+  for (BrowserObserver& observer : observers_)
+    observer.OnWillContinueUserActivity(&prevent_default, type);
+  return prevent_default;
+}
+
+void Browser::DidFailToContinueUserActivity(const std::string& type,
+                                            const std::string& error) {
+  for (BrowserObserver& observer : observers_)
+    observer.OnDidFailToContinueUserActivity(type, error);
+}
+
 bool Browser::ContinueUserActivity(const std::string& type,
                                    const base::DictionaryValue& user_info) {
   bool prevent_default = false;
@@ -152,30 +186,116 @@ bool Browser::ContinueUserActivity(const std::string& type,
   return prevent_default;
 }
 
+void Browser::UserActivityWasContinued(const std::string& type,
+                                       const base::DictionaryValue& user_info) {
+  for (BrowserObserver& observer : observers_)
+    observer.OnUserActivityWasContinued(type, user_info);
+}
+
+bool Browser::UpdateUserActivityState(const std::string& type,
+                                      const base::DictionaryValue& user_info) {
+  bool prevent_default = false;
+  for (BrowserObserver& observer : observers_)
+    observer.OnUpdateUserActivityState(&prevent_default, type, user_info);
+  return prevent_default;
+}
+
 Browser::LoginItemSettings Browser::GetLoginItemSettings(
     const LoginItemSettings& options) {
   LoginItemSettings settings;
-  settings.open_at_login = base::mac::CheckLoginItemStatus(
-      &settings.open_as_hidden);
+#if defined(MAS_BUILD)
+  settings.open_at_login = platform_util::GetLoginItemEnabled();
+#else
+  settings.open_at_login =
+      base::mac::CheckLoginItemStatus(&settings.open_as_hidden);
   settings.restore_state = base::mac::WasLaunchedAsLoginItemRestoreState();
   settings.opened_at_login = base::mac::WasLaunchedAsLoginOrResumeItem();
   settings.opened_as_hidden = base::mac::WasLaunchedAsHiddenLoginItem();
+#endif
   return settings;
 }
 
+// copied from GetLoginItemForApp in base/mac/mac_util.mm
+LSSharedFileListItemRef GetLoginItemForApp() {
+  base::ScopedCFTypeRef<LSSharedFileListRef> login_items(
+      LSSharedFileListCreate(NULL, kLSSharedFileListSessionLoginItems, NULL));
+  if (!login_items.get()) {
+    LOG(ERROR) << "Couldn't get a Login Items list.";
+    return NULL;
+  }
+  base::scoped_nsobject<NSArray> login_items_array(
+      base::mac::CFToNSCast(LSSharedFileListCopySnapshot(login_items, NULL)));
+  NSURL* url = [NSURL fileURLWithPath:[base::mac::MainBundle() bundlePath]];
+  for (NSUInteger i = 0; i < [login_items_array count]; ++i) {
+    LSSharedFileListItemRef item =
+        reinterpret_cast<LSSharedFileListItemRef>(login_items_array[i]);
+    base::ScopedCFTypeRef<CFErrorRef> error;
+    CFURLRef item_url_ref =
+        LSSharedFileListItemCopyResolvedURL(item, 0, error.InitializeInto());
+    if (!error && item_url_ref) {
+      base::ScopedCFTypeRef<CFURLRef> item_url(item_url_ref);
+      if (CFEqual(item_url, url)) {
+        CFRetain(item);
+        return item;
+      }
+    }
+  }
+  return NULL;
+}
+
+void RemoveFromLoginItems() {
+  base::ScopedCFTypeRef<LSSharedFileListRef> list(
+      LSSharedFileListCreate(NULL, kLSSharedFileListSessionLoginItems, NULL));
+  if (!list) {
+    LOG(ERROR) << "Unable to access shared file list";
+    return;
+  }
+
+  if (GetLoginItemForApp() != NULL) {
+    base::scoped_nsobject<NSArray> login_items_array(
+        base::mac::CFToNSCast(LSSharedFileListCopySnapshot(list, NULL)));
+
+    if (!login_items_array) {
+      LOG(ERROR) << "No items in list of auto-loaded apps";
+      return;
+    }
+
+    for (NSUInteger i = 0; i < [login_items_array count]; ++i) {
+      LSSharedFileListItemRef item =
+          reinterpret_cast<LSSharedFileListItemRef>(login_items_array[i]);
+      base::ScopedCFTypeRef<CFErrorRef> error;
+      CFURLRef url_ref =
+          LSSharedFileListItemCopyResolvedURL(item, 0, error.InitializeInto());
+      if (!error && url_ref) {
+        base::ScopedCFTypeRef<CFURLRef> url(url_ref);
+        if ([[base::mac::CFToNSCast(url.get()) path]
+                hasPrefix:[[NSBundle mainBundle] bundlePath]])
+          LSSharedFileListItemRemove(list, item);
+      }
+    }
+  }
+}
+
 void Browser::SetLoginItemSettings(LoginItemSettings settings) {
+#if defined(MAS_BUILD)
+  if (!platform_util::SetLoginItemEnabled(settings.open_at_login)) {
+    LOG(ERROR) << "Unable to set login item enabled on sandboxed app.";
+  }
+#else
   if (settings.open_at_login)
     base::mac::AddToLoginItems(settings.open_as_hidden);
-  else
-    base::mac::RemoveFromLoginItems();
+  else {
+    RemoveFromLoginItems();
+  }
+#endif
 }
 
 std::string Browser::GetExecutableFileVersion() const {
-  return brightray::GetApplicationVersion();
+  return GetApplicationVersion();
 }
 
 std::string Browser::GetExecutableFileProductName() const {
-  return brightray::GetApplicationName();
+  return GetApplicationName();
 }
 
 int Browser::DockBounce(BounceType type) {
@@ -188,38 +308,42 @@ void Browser::DockCancelBounce(int request_id) {
 }
 
 void Browser::DockSetBadgeText(const std::string& label) {
-  NSDockTile *tile = [[AtomApplication sharedApplication] dockTile];
+  NSDockTile* tile = [[AtomApplication sharedApplication] dockTile];
   [tile setBadgeLabel:base::SysUTF8ToNSString(label)];
 }
 
 void Browser::DockDownloadFinished(const std::string& filePath) {
   [[NSDistributedNotificationCenter defaultCenter]
-      postNotificationName: @"com.apple.DownloadFileFinished"
-                    object: base::SysUTF8ToNSString(filePath)];
+      postNotificationName:@"com.apple.DownloadFileFinished"
+                    object:base::SysUTF8ToNSString(filePath)];
 }
 
 std::string Browser::DockGetBadgeText() {
-  NSDockTile *tile = [[AtomApplication sharedApplication] dockTile];
+  NSDockTile* tile = [[AtomApplication sharedApplication] dockTile];
   return base::SysNSStringToUTF8([tile badgeLabel]);
 }
 
 void Browser::DockHide() {
-  for (const auto& window : WindowList::GetWindows())
-    [window->GetNativeWindow() setCanHide:NO];
+  for (auto* const& window : WindowList::GetWindows())
+    [window->GetNativeWindow().GetNativeNSWindow() setCanHide:NO];
 
-  ProcessSerialNumber psn = { 0, kCurrentProcess };
+  ProcessSerialNumber psn = {0, kCurrentProcess};
   TransformProcessType(&psn, kProcessTransformToUIElementApplication);
 }
 
 bool Browser::DockIsVisible() {
   // Because DockShow has a slight delay this may not be true immediately
   // after that call.
-  return ([[NSRunningApplication currentApplication] activationPolicy] == NSApplicationActivationPolicyRegular);
+  return ([[NSRunningApplication currentApplication] activationPolicy] ==
+          NSApplicationActivationPolicyRegular);
 }
 
-void Browser::DockShow() {
+v8::Local<v8::Promise> Browser::DockShow(v8::Isolate* isolate) {
+  util::Promise promise(isolate);
+  v8::Local<v8::Promise> handle = promise.GetHandle();
+
   BOOL active = [[NSRunningApplication currentApplication] isActive];
-  ProcessSerialNumber psn = { 0, kCurrentProcess };
+  ProcessSerialNumber psn = {0, kCurrentProcess};
   if (active) {
     // Workaround buggy behavior of TransformProcessType.
     // http://stackoverflow.com/questions/7596643/
@@ -229,6 +353,7 @@ void Browser::DockShow() {
       [app activateWithOptions:NSApplicationActivateIgnoringOtherApps];
       break;
     }
+    __block util::Promise p = std::move(promise);
     dispatch_time_t one_ms = dispatch_time(DISPATCH_TIME_NOW, USEC_PER_SEC);
     dispatch_after(one_ms, dispatch_get_main_queue(), ^{
       TransformProcessType(&psn, kProcessTransformToForegroundApplication);
@@ -236,15 +361,19 @@ void Browser::DockShow() {
       dispatch_after(one_ms, dispatch_get_main_queue(), ^{
         [[NSRunningApplication currentApplication]
             activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+        p.Resolve();
       });
     });
   } else {
     TransformProcessType(&psn, kProcessTransformToForegroundApplication);
+    promise.Resolve();
   }
+  return handle;
 }
 
 void Browser::DockSetMenu(AtomMenuModel* model) {
-  AtomApplicationDelegate* delegate = (AtomApplicationDelegate*)[NSApp delegate];
+  AtomApplicationDelegate* delegate =
+      (AtomApplicationDelegate*)[NSApp delegate];
   [delegate setApplicationDockMenu:model];
 }
 
@@ -272,17 +401,22 @@ void Browser::ShowAboutPanel() {
 void Browser::SetAboutPanelOptions(const base::DictionaryValue& options) {
   about_panel_options_.Clear();
 
-  // Upper case option keys for orderFrontStandardAboutPanelWithOptions format
-  for (base::DictionaryValue::Iterator iter(options);
-       !iter.IsAtEnd();
-       iter.Advance()) {
-    std::string key = iter.key();
-    std::string value;
-    if (!key.empty() && iter.value().GetAsString(&value)) {
+  for (const auto& pair : options) {
+    std::string key = pair.first;
+    const auto& val = pair.second;
+    if (!key.empty() && val->is_string()) {
       key[0] = base::ToUpperASCII(key[0]);
-      about_panel_options_.SetString(key, value);
+      about_panel_options_.SetString(key, val->GetString());
     }
   }
+}
+
+void Browser::ShowEmojiPanel() {
+  [[AtomApplication sharedApplication] orderFrontCharacterPalette:nil];
+}
+
+bool Browser::IsEmojiPanelSupported() {
+  return true;
 }
 
 }  // namespace atom

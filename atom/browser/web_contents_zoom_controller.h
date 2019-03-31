@@ -8,6 +8,7 @@
 #include <map>
 #include <string>
 
+#include "base/observer_list_types.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
@@ -19,14 +20,15 @@ class WebContentsZoomController
     : public content::WebContentsObserver,
       public content::WebContentsUserData<WebContentsZoomController> {
  public:
-  class Observer {
+  class Observer : public base::CheckedObserver {
    public:
     virtual void OnZoomLevelChanged(content::WebContents* web_contents,
                                     double level,
                                     bool is_temporary) {}
+    virtual void OnZoomControllerWebContentsDestroyed() {}
 
    protected:
-    virtual ~Observer() {}
+    ~Observer() override {}
   };
 
   // Defines how zoom changes are handled.
@@ -93,23 +95,24 @@ class WebContentsZoomController
   void SetZoomFactorOnNavigationIfNeeded(const GURL& url);
 
   // The current zoom mode.
-  ZoomMode zoom_mode_;
+  ZoomMode zoom_mode_ = ZOOM_MODE_DEFAULT;
 
   // Current zoom level.
-  double zoom_level_;
+  double zoom_level_ = 1.0;
 
   // kZoomFactor.
-  double default_zoom_factor_;
-  double temporary_zoom_level_;
+  double default_zoom_factor_ = 0;
 
-  int old_process_id_;
-  int old_view_id_;
+  int old_process_id_ = -1;
+  int old_view_id_ = -1;
 
-  WebContentsZoomController* embedder_zoom_controller_;
+  WebContentsZoomController* embedder_zoom_controller_ = nullptr;
 
   base::ObserverList<Observer> observers_;
 
   content::HostZoomMap* host_zoom_map_;
+
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
 
   DISALLOW_COPY_AND_ASSIGN(WebContentsZoomController);
 };

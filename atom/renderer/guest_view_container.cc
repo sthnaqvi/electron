@@ -5,6 +5,7 @@
 #include "atom/renderer/guest_view_container.h"
 
 #include <map>
+#include <utility>
 
 #include "base/bind.h"
 #include "base/lazy_instance.h"
@@ -16,14 +17,13 @@ namespace atom {
 namespace {
 
 using GuestViewContainerMap = std::map<int, GuestViewContainer*>;
-static base::LazyInstance<GuestViewContainerMap> g_guest_view_container_map =
-    LAZY_INSTANCE_INITIALIZER;
+static base::LazyInstance<GuestViewContainerMap>::DestructorAtExit
+    g_guest_view_container_map = LAZY_INSTANCE_INITIALIZER;
 
 }  // namespace
 
 GuestViewContainer::GuestViewContainer(content::RenderFrame* render_frame)
-    : weak_ptr_factory_(this) {
-}
+    : weak_ptr_factory_(this) {}
 
 GuestViewContainer::~GuestViewContainer() {
   if (element_instance_id_ > 0)
@@ -54,7 +54,7 @@ void GuestViewContainer::DidResizeElement(const gfx::Size& new_size) {
     return;
 
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::Bind(element_resize_callback_, new_size));
+      FROM_HERE, base::BindOnce(element_resize_callback_, new_size));
 }
 
 base::WeakPtr<content::BrowserPluginDelegate> GuestViewContainer::GetWeakPtr() {

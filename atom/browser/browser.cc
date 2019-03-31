@@ -4,25 +4,33 @@
 
 #include "atom/browser/browser.h"
 
+#include <memory>
 #include <string>
+#include <utility>
 
 #include "atom/browser/atom_browser_main_parts.h"
+#include "atom/browser/atom_paths.h"
 #include "atom/browser/browser_observer.h"
+#include "atom/browser/login_handler.h"
 #include "atom/browser/native_window.h"
 #include "atom/browser/window_list.h"
+#include "atom/common/application_info.h"
 #include "base/files/file_util.h"
+#include "base/message_loop/message_loop.h"
+#include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "brightray/browser/brightray_paths.h"
 
 namespace atom {
 
-Browser::Browser()
-    : is_quiting_(false),
-      is_exiting_(false),
-      is_ready_(false),
-      is_shutdown_(false) {
+Browser::LoginItemSettings::LoginItemSettings() = default;
+Browser::LoginItemSettings::~LoginItemSettings() = default;
+Browser::LoginItemSettings::LoginItemSettings(const LoginItemSettings& other) =
+    default;
+
+Browser::Browser() {
   WindowList::AddObserver(this);
 }
 
@@ -84,41 +92,35 @@ void Browser::Shutdown() {
   for (BrowserObserver& observer : observers_)
     observer.OnQuit();
 
-  if (base::ThreadTaskRunnerHandle::IsSet()) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::MessageLoop::QuitWhenIdleClosure());
+  if (quit_main_message_loop_) {
+    std::move(quit_main_message_loop_).Run();
   } else {
-    // There is no message loop available so we are in early stage.
-    exit(0);
+    // There is no message loop available so we are in early stage, wait until
+    // the quit_main_message_loop_ is available.
+    // Exiting now would leave defunct processes behind.
   }
 }
 
 std::string Browser::GetVersion() const {
-  if (version_override_.empty()) {
-    std::string version = GetExecutableFileVersion();
-    if (!version.empty())
-      return version;
-  }
-
-  return version_override_;
+  std::string ret = GetOverriddenApplicationVersion();
+  if (ret.empty())
+    ret = GetExecutableFileVersion();
+  return ret;
 }
 
 void Browser::SetVersion(const std::string& version) {
-  version_override_ = version;
+  OverrideApplicationVersion(version);
 }
 
 std::string Browser::GetName() const {
-  if (name_override_.empty()) {
-    std::string name = GetExecutableFileProductName();
-    if (!name.empty())
-      return name;
-  }
-
-  return name_override_;
+  std::string ret = GetOverriddenApplicationName();
+  if (ret.empty())
+    ret = GetExecutableFileProductName();
+  return ret;
 }
 
 void Browser::SetName(const std::string& name) {
-  name_override_ = name;
+  OverrideApplicationName(name);
 }
 
 int Browser::GetBadgeCount() {
@@ -150,13 +152,27 @@ void Browser::WillFinishLaunching() {
 
 void Browser::DidFinishLaunching(const base::DictionaryValue& launch_info) {
   // Make sure the userData directory is created.
+  base::ThreadRestrictions::ScopedAllowIO allow_io;
   base::FilePath user_data;
-  if (PathService::Get(brightray::DIR_USER_DATA, &user_data))
+  if (base::PathService::Get(DIR_USER_DATA, &user_data))
     base::CreateDirectoryAndGetError(user_data, nullptr);
 
   is_ready_ = true;
+  if (ready_promise_) {
+    ready_promise_->Resolve();
+  }
   for (BrowserObserver& observer : observers_)
     observer.OnFinishLaunching(launch_info);
+}
+
+const util::Promise& Browser::WhenReady(v8::Isolate* isolate) {
+  if (!ready_promise_) {
+    ready_promise_.reset(new util::Promise(isolate));
+    if (is_ready()) {
+      ready_promise_->Resolve();
+    }
+  }
+  return *ready_promise_;
 }
 
 void Browser::OnAccessibilitySupportChanged() {
@@ -165,10 +181,23 @@ void Browser::OnAccessibilitySupportChanged() {
 }
 
 void Browser::RequestLogin(
-    LoginHandler* login_handler,
+    scoped_refptr<LoginHandler> login_handler,
     std::unique_ptr<base::DictionaryValue> request_details) {
   for (BrowserObserver& observer : observers_)
     observer.OnLogin(login_handler, *(request_details.get()));
+}
+
+void Browser::PreMainMessageLoopRun() {
+  for (BrowserObserver& observer : observers_) {
+    observer.OnPreMainMessageLoopRun();
+  }
+}
+
+void Browser::SetMainMessageLoopQuitClosure(base::OnceClosure quit_closure) {
+  if (is_shutdown_)
+    std::move(quit_closure).Run();
+  else
+    quit_main_message_loop_ = std::move(quit_closure);
 }
 
 void Browser::NotifyAndShutdown() {

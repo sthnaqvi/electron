@@ -3,8 +3,12 @@
 // found in the LICENSE file.
 
 #include "atom/browser/ui/views/autofill_popup_view.h"
+
+#include <memory>
+
 #include "base/bind.h"
 #include "base/i18n/rtl.h"
+#include "cc/paint/skia_paint_canvas.h"
 #include "content/public/browser/render_view_host.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/canvas.h"
@@ -17,15 +21,14 @@
 
 namespace atom {
 
-AutofillPopupView::AutofillPopupView(
-    AutofillPopup* popup,
-    views::Widget* parent_widget)
-    : popup_(popup),
-      parent_widget_(parent_widget),
-#if defined(ENABLE_OSR)
-      view_proxy_(nullptr),
-#endif
-      weak_ptr_factory_(this) {
+void AutofillPopupChildView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
+  node_data->role = ax::mojom::Role::kMenuItem;
+  node_data->SetName(suggestion_);
+}
+
+AutofillPopupView::AutofillPopupView(AutofillPopup* popup,
+                                     views::Widget* parent_widget)
+    : popup_(popup), parent_widget_(parent_widget), weak_ptr_factory_(this) {
   CreateChildViews();
   SetFocusBehavior(FocusBehavior::ALWAYS);
   set_drag_controller(this);
@@ -33,7 +36,7 @@ AutofillPopupView::AutofillPopupView(
 
 AutofillPopupView::~AutofillPopupView() {
   if (popup_) {
-    auto host = popup_->frame_host_->GetRenderViewHost()->GetWidget();
+    auto* host = popup_->frame_host_->GetRenderViewHost()->GetWidget();
     host->RemoveKeyPressEventCallback(keypress_callback_);
     popup_->view_ = nullptr;
     popup_ = nullptr;
@@ -41,7 +44,7 @@ AutofillPopupView::~AutofillPopupView() {
 
   RemoveObserver();
 
-#if defined(ENABLE_OSR)
+#if BUILDFLAG(ENABLE_OSR)
   if (view_proxy_.get()) {
     view_proxy_->ResetView();
   }
@@ -53,21 +56,12 @@ AutofillPopupView::~AutofillPopupView() {
 }
 
 void AutofillPopupView::Show() {
-  if (!popup_)
+  if (!popup_ || !parent_widget_->IsVisible() || parent_widget_->IsClosed())
     return;
 
   const bool initialize_widget = !GetWidget();
   if (initialize_widget) {
     parent_widget_->AddObserver(this);
-    views::FocusManager* focus_manager = parent_widget_->GetFocusManager();
-    focus_manager->RegisterAccelerator(
-        ui::Accelerator(ui::VKEY_RETURN, ui::EF_NONE),
-        ui::AcceleratorManager::kNormalPriority,
-        this);
-    focus_manager->RegisterAccelerator(
-        ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE),
-        ui::AcceleratorManager::kNormalPriority,
-        this);
 
     // The widget is destroyed by the corresponding NativeWidget, so we use
     // a weak pointer to hold the reference and don't have to worry about
@@ -96,22 +90,22 @@ void AutofillPopupView::Show() {
     views::WidgetFocusManager::GetInstance()->AddFocusChangeListener(this);
 
   keypress_callback_ = base::Bind(&AutofillPopupView::HandleKeyPressEvent,
-    base::Unretained(this));
-  auto host = popup_->frame_host_->GetRenderViewHost()->GetWidget();
+                                  base::Unretained(this));
+  auto* host = popup_->frame_host_->GetRenderViewHost()->GetWidget();
   host->AddKeyPressEventCallback(keypress_callback_);
 
-  NotifyAccessibilityEvent(ui::AX_EVENT_MENU_START, true);
+  NotifyAccessibilityEvent(ax::mojom::Event::kMenuStart, true);
 }
 
 void AutofillPopupView::Hide() {
   if (popup_) {
-    auto host = popup_->frame_host_->GetRenderViewHost()->GetWidget();
+    auto* host = popup_->frame_host_->GetRenderViewHost()->GetWidget();
     host->RemoveKeyPressEventCallback(keypress_callback_);
     popup_ = nullptr;
   }
 
   RemoveObserver();
-  NotifyAccessibilityEvent(ui::AX_EVENT_MENU_END, true);
+  NotifyAccessibilityEvent(ax::mojom::Event::kMenuEnd, true);
 
   if (GetWidget()) {
     GetWidget()->Close();
@@ -130,6 +124,21 @@ void AutofillPopupView::OnSuggestionsChanged() {
   DoUpdateBoundsAndRedrawPopup();
 }
 
+void AutofillPopupView::WriteDragDataForView(views::View*,
+                                             const gfx::Point&,
+                                             ui::OSExchangeData*) {}
+
+int AutofillPopupView::GetDragOperationsForView(views::View*,
+                                                const gfx::Point&) {
+  return ui::DragDropTypes::DRAG_NONE;
+}
+
+bool AutofillPopupView::CanStartDragForView(views::View*,
+                                            const gfx::Point&,
+                                            const gfx::Point&) {
+  return false;
+}
+
 void AutofillPopupView::OnSelectedRowChanged(
     base::Optional<int> previous_row_selection,
     base::Optional<int> current_row_selection) {
@@ -139,7 +148,8 @@ void AutofillPopupView::OnSelectedRowChanged(
     int selected = current_row_selection.value_or(-1);
     if (selected == -1 || selected >= child_count())
       return;
-    child_at(selected)->NotifyAccessibilityEvent(ui::AX_EVENT_SELECTION, true);
+    child_at(selected)->NotifyAccessibilityEvent(ax::mojom::Event::kSelection,
+                                                 true);
   }
 }
 
@@ -149,30 +159,26 @@ void AutofillPopupView::DrawAutofillEntry(gfx::Canvas* canvas,
   if (!popup_)
     return;
 
-  canvas->FillRect(
-      entry_rect,
-      GetNativeTheme()->GetSystemColor(
-          popup_->GetBackgroundColorIDForRow(index)));
+  canvas->FillRect(entry_rect, GetNativeTheme()->GetSystemColor(
+                                   popup_->GetBackgroundColorIDForRow(index)));
 
   const bool is_rtl = base::i18n::IsRTL();
   const int text_align =
-    is_rtl ? gfx::Canvas::TEXT_ALIGN_RIGHT : gfx::Canvas::TEXT_ALIGN_LEFT;
+      is_rtl ? gfx::Canvas::TEXT_ALIGN_RIGHT : gfx::Canvas::TEXT_ALIGN_LEFT;
   gfx::Rect value_rect = entry_rect;
   value_rect.Inset(kEndPadding, 0);
 
   int x_align_left = value_rect.x();
   const int value_width = gfx::GetStringWidth(
-     popup_->GetValueAt(index),
-     popup_->GetValueFontListForRow(index));
+      popup_->GetValueAt(index), popup_->GetValueFontListForRow(index));
   int value_x_align_left = x_align_left;
   value_x_align_left =
-    is_rtl ? value_rect.right() - value_width : value_rect.x();
+      is_rtl ? value_rect.right() - value_width : value_rect.x();
 
   canvas->DrawStringRectWithFlags(
-      popup_->GetValueAt(index),
-      popup_->GetValueFontListForRow(index),
+      popup_->GetValueAt(index), popup_->GetValueFontListForRow(index),
       GetNativeTheme()->GetSystemColor(
-        ui::NativeTheme::kColorId_ResultsTableNormalText),
+          ui::NativeTheme::kColorId_ResultsTableNormalText),
       gfx::Rect(value_x_align_left, value_rect.y(), value_width,
                 value_rect.height()),
       text_align);
@@ -180,17 +186,15 @@ void AutofillPopupView::DrawAutofillEntry(gfx::Canvas* canvas,
   // Draw the label text, if one exists.
   if (!popup_->GetLabelAt(index).empty()) {
     const int label_width = gfx::GetStringWidth(
-        popup_->GetLabelAt(index),
-        popup_->GetLabelFontListForRow(index));
+        popup_->GetLabelAt(index), popup_->GetLabelFontListForRow(index));
     int label_x_align_left = x_align_left;
     label_x_align_left =
-      is_rtl ? value_rect.x() : value_rect.right() - label_width;
+        is_rtl ? value_rect.x() : value_rect.right() - label_width;
 
     canvas->DrawStringRectWithFlags(
-        popup_->GetLabelAt(index),
-        popup_->GetLabelFontListForRow(index),
+        popup_->GetLabelAt(index), popup_->GetLabelFontListForRow(index),
         GetNativeTheme()->GetSystemColor(
-            ui::NativeTheme::kColorId_ResultsTableNormalDimmedText),
+            ui::NativeTheme::kColorId_ResultsTableDimmedText),
         gfx::Rect(label_x_align_left, entry_rect.y(), label_width,
                   entry_rect.height()),
         text_align);
@@ -204,7 +208,7 @@ void AutofillPopupView::CreateChildViews() {
   RemoveAllChildViews(true);
 
   for (int i = 0; i < popup_->GetLineCount(); ++i) {
-    auto child_view = new AutofillPopupChildView(popup_->GetValueAt(i));
+    auto* child_view = new AutofillPopupChildView(popup_->GetValueAt(i));
     child_view->set_drag_controller(this);
     AddChildView(child_view);
   }
@@ -215,6 +219,11 @@ void AutofillPopupView::DoUpdateBoundsAndRedrawPopup() {
     return;
 
   GetWidget()->SetBounds(popup_->popup_bounds_);
+#if BUILDFLAG(ENABLE_OSR)
+  if (view_proxy_.get()) {
+    view_proxy_->SetBounds(popup_->popup_bounds_in_view());
+  }
+#endif
   SchedulePaint();
 }
 
@@ -224,12 +233,13 @@ void AutofillPopupView::OnPaint(gfx::Canvas* canvas) {
   gfx::Canvas* draw_canvas = canvas;
   SkBitmap bitmap;
 
-#if defined(ENABLE_OSR)
+#if BUILDFLAG(ENABLE_OSR)
+  std::unique_ptr<cc::SkiaPaintCanvas> paint_canvas;
   if (view_proxy_.get()) {
-    bitmap.allocN32Pixels(popup_->popup_bounds_in_view_.width(),
-                          popup_->popup_bounds_in_view_.height(),
-                          true);
-    draw_canvas = new gfx::Canvas(new SkCanvas(bitmap), 1.0);
+    bitmap.allocN32Pixels(popup_->popup_bounds_in_view().width(),
+                          popup_->popup_bounds_in_view().height(), true);
+    paint_canvas.reset(new cc::SkiaPaintCanvas(bitmap));
+    draw_canvas = new gfx::Canvas(paint_canvas.get(), 1.0);
   }
 #endif
 
@@ -243,16 +253,16 @@ void AutofillPopupView::OnPaint(gfx::Canvas* canvas) {
     DrawAutofillEntry(draw_canvas, i, line_rect);
   }
 
-#if defined(ENABLE_OSR)
+#if BUILDFLAG(ENABLE_OSR)
   if (view_proxy_.get()) {
-    view_proxy_->SetBounds(popup_->popup_bounds_in_view_);
+    view_proxy_->SetBounds(popup_->popup_bounds_in_view());
     view_proxy_->SetBitmap(bitmap);
   }
 #endif
 }
 
 void AutofillPopupView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  node_data->role = ui::AX_ROLE_MENU;
+  node_data->role = ax::mojom::Role::kMenu;
   node_data->SetName("Autofill Menu");
 }
 
@@ -337,8 +347,7 @@ void AutofillPopupView::OnGestureEvent(ui::GestureEvent* event) {
   event->SetHandled();
 }
 
-bool AutofillPopupView::AcceleratorPressed(
-    const ui::Accelerator& accelerator) {
+bool AutofillPopupView::AcceleratorPressed(const ui::Accelerator& accelerator) {
   if (accelerator.modifiers() != ui::EF_NONE)
     return false;
 
@@ -358,7 +367,7 @@ bool AutofillPopupView::HandleKeyPressEvent(
     const content::NativeWebKeyboardEvent& event) {
   if (!popup_)
     return false;
-  switch (event.windowsKeyCode) {
+  switch (event.windows_key_code) {
     case ui::VKEY_UP:
       SelectPreviousLine();
       return true;
@@ -471,7 +480,6 @@ void AutofillPopupView::ClearSelection() {
 }
 
 void AutofillPopupView::RemoveObserver() {
-  parent_widget_->GetFocusManager()->UnregisterAccelerators(this);
   parent_widget_->RemoveObserver(this);
   views::WidgetFocusManager::GetInstance()->RemoveFocusChangeListener(this);
 }

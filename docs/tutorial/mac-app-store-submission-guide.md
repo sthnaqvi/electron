@@ -4,7 +4,7 @@ Since v0.34.0, Electron allows submitting packaged apps to the Mac App Store
 (MAS). This guide provides information on: how to submit your app and the
 limitations of the MAS build.
 
-**Note:** Submitting an app to Mac App Store requires enrolling [Apple Developer
+**Note:** Submitting an app to Mac App Store requires enrolling in the [Apple Developer
 Program][developer-program], which costs money.
 
 ## How to Submit Your App
@@ -33,7 +33,7 @@ After finishing the preparation work, you can package your app by following
 signing your app.
 
 First, you have to add a `ElectronTeamID` key to your app's `Info.plist`, which
-has your Team ID as value:
+has your Team ID as its value:
 
 ```xml
 <plist version="1.0">
@@ -45,7 +45,7 @@ has your Team ID as value:
 </plist>
 ```
 
-Then, you need to prepare two entitlements files.
+Then, you need to prepare three entitlements files.
 
 `child.plist`:
 
@@ -77,12 +77,25 @@ Then, you need to prepare two entitlements files.
 </plist>
 ```
 
+`loginhelper.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+  </dict>
+</plist>
+```
+
 You have to replace `TEAM_ID` with your Team ID, and replace `your.bundle.id`
 with the Bundle ID of your app.
 
 And then sign your app with the following script:
 
-```bash
+```sh
 #!/bin/bash
 
 # Name of your app.
@@ -97,6 +110,7 @@ INSTALLER_KEY="3rd Party Mac Developer Installer: Company Name (APPIDENTITY)"
 # The path of your plist files.
 CHILD_PLIST="/path/to/child.plist"
 PARENT_PLIST="/path/to/parent.plist"
+LOGINHELPER_PLIST="/path/to/loginhelper.plist"
 
 FRAMEWORKS_PATH="$APP_PATH/Contents/Frameworks"
 
@@ -106,10 +120,8 @@ codesign -s "$APP_KEY" -f --entitlements "$CHILD_PLIST" "$FRAMEWORKS_PATH/Electr
 codesign -s "$APP_KEY" -f --entitlements "$CHILD_PLIST" "$FRAMEWORKS_PATH/Electron Framework.framework"
 codesign -s "$APP_KEY" -f --entitlements "$CHILD_PLIST" "$FRAMEWORKS_PATH/$APP Helper.app/Contents/MacOS/$APP Helper"
 codesign -s "$APP_KEY" -f --entitlements "$CHILD_PLIST" "$FRAMEWORKS_PATH/$APP Helper.app/"
-codesign -s "$APP_KEY" -f --entitlements "$CHILD_PLIST" "$FRAMEWORKS_PATH/$APP Helper EH.app/Contents/MacOS/$APP Helper EH"
-codesign -s "$APP_KEY" -f --entitlements "$CHILD_PLIST" "$FRAMEWORKS_PATH/$APP Helper EH.app/"
-codesign -s "$APP_KEY" -f --entitlements "$CHILD_PLIST" "$FRAMEWORKS_PATH/$APP Helper NP.app/Contents/MacOS/$APP Helper NP"
-codesign -s "$APP_KEY" -f --entitlements "$CHILD_PLIST" "$FRAMEWORKS_PATH/$APP Helper NP.app/"
+codesign -s "$APP_KEY" -f --entitlements "$LOGINHELPER_PLIST" "$APP_PATH/Contents/Library/LoginItems/$APP Login Helper.app/Contents/MacOS/$APP Login Helper"
+codesign -s "$APP_KEY" -f --entitlements "$LOGINHELPER_PLIST" "$APP_PATH/Contents/Library/LoginItems/$APP Login Helper.app/"
 codesign -s "$APP_KEY" -f --entitlements "$CHILD_PLIST" "$APP_PATH/Contents/MacOS/$APP"
 codesign -s "$APP_KEY" -f --entitlements "$PARENT_PLIST" "$APP_PATH"
 
@@ -129,7 +141,7 @@ Native modules used in your app also need to be signed. If using
 electron-osx-sign, be sure to include the path to the built binaries in the
 argument list:
 
-```bash
+```sh
 electron-osx-sign YourApp.app YourApp.app/Contents/Resources/app/node_modules/nativemodule/build/release/nativemodule
 ```
 
@@ -137,7 +149,7 @@ Also note that native modules may have intermediate files produced which should
 not be included (as they would also need to be signed). If you use
 [electron-packager][electron-packager] before version 8.1.0, add
 `--ignore=.+\.o$` to your build step to ignore these files. Versions 8.1.0 and
-later ignores those files by default.
+later ignore those files by default.
 
 ### Upload Your App
 
@@ -162,8 +174,6 @@ and the following behaviors have been changed:
 * Video capture may not work for some machines.
 * Certain accessibility features may not work.
 * Apps will not be aware of DNS changes.
-* APIs for launching apps at login are disabled. See
-https://github.com/electron/electron/issues/7312#issuecomment-249479237
 
 Also, due to the usage of app sandboxing, the resources which can be accessed by
 the app are strictly limited; you can read [App Sandboxing][app-sandboxing] for
@@ -215,17 +225,6 @@ more details.
 See the [Enabling User-Selected File Access documentation][user-selected] for
 more details.
 
-## Known issues
-
-### `shell.openItem(filePath)` 
-
-This will fail when the app is signed for distribution in the Mac App Store.
-Subscribe to [#9005](https://github.com/electron/electron/issues/9005) for updates.
-
-#### Workaround
-
-`shell.openExternal('file://' + filePath)` will open the file in the default application as long as the extension is associated with an installed app.
-
 ## Cryptographic Algorithms Used by Electron
 
 Depending on the country and region you are located, Mac App Store may require
@@ -234,29 +233,29 @@ submit a copy of U.S. Encryption Registration (ERN) approval.
 
 Electron uses following cryptographic algorithms:
 
-* AES - [NIST SP 800-38A](http://csrc.nist.gov/publications/nistpubs/800-38a/sp800-38a.pdf), [NIST SP 800-38D](http://csrc.nist.gov/publications/nistpubs/800-38D/SP-800-38D.pdf), [RFC 3394](http://www.ietf.org/rfc/rfc3394.txt)
-* HMAC - [FIPS 198-1](http://csrc.nist.gov/publications/fips/fips198-1/FIPS-198-1_final.pdf)
+* AES - [NIST SP 800-38A](https://csrc.nist.gov/publications/nistpubs/800-38a/sp800-38a.pdf), [NIST SP 800-38D](https://csrc.nist.gov/publications/nistpubs/800-38D/SP-800-38D.pdf), [RFC 3394](https://www.ietf.org/rfc/rfc3394.txt)
+* HMAC - [FIPS 198-1](https://csrc.nist.gov/publications/fips/fips198-1/FIPS-198-1_final.pdf)
 * ECDSA - ANS X9.62–2005
 * ECDH - ANS X9.63–2001
-* HKDF - [NIST SP 800-56C](http://csrc.nist.gov/publications/nistpubs/800-56C/SP-800-56C.pdf)
+* HKDF - [NIST SP 800-56C](https://csrc.nist.gov/publications/nistpubs/800-56C/SP-800-56C.pdf)
 * PBKDF2 - [RFC 2898](https://tools.ietf.org/html/rfc2898)
 * RSA - [RFC 3447](http://www.ietf.org/rfc/rfc3447)
-* SHA - [FIPS 180-4](http://csrc.nist.gov/publications/fips/fips180-4/fips-180-4.pdf)
+* SHA - [FIPS 180-4](https://csrc.nist.gov/publications/fips/fips180-4/fips-180-4.pdf)
 * Blowfish - https://www.schneier.com/cryptography/blowfish/
 * CAST - [RFC 2144](https://tools.ietf.org/html/rfc2144), [RFC 2612](https://tools.ietf.org/html/rfc2612)
-* DES - [FIPS 46-3](http://csrc.nist.gov/publications/fips/fips46-3/fips46-3.pdf)
+* DES - [FIPS 46-3](https://csrc.nist.gov/publications/fips/fips46-3/fips46-3.pdf)
 * DH - [RFC 2631](https://tools.ietf.org/html/rfc2631)
-* DSA - [ANSI X9.30](http://webstore.ansi.org/RecordDetail.aspx?sku=ANSI+X9.30-1%3A1997)
+* DSA - [ANSI X9.30](https://webstore.ansi.org/RecordDetail.aspx?sku=ANSI+X9.30-1%3A1997)
 * EC - [SEC 1](http://www.secg.org/sec1-v2.pdf)
 * IDEA - "On the Design and Security of Block Ciphers" book by X. Lai
-* MD2 - [RFC 1319](http://tools.ietf.org/html/rfc1319)
+* MD2 - [RFC 1319](https://tools.ietf.org/html/rfc1319)
 * MD4 - [RFC 6150](https://tools.ietf.org/html/rfc6150)
 * MD5 - [RFC 1321](https://tools.ietf.org/html/rfc1321)
-* MDC2 - [ISO/IEC 10118-2](https://www.openssl.org/docs/manmaster/crypto/mdc2.html)
+* MDC2 - [ISO/IEC 10118-2](https://wiki.openssl.org/index.php/Manual:Mdc2(3))
 * RC2 - [RFC 2268](https://tools.ietf.org/html/rfc2268)
 * RC4 - [RFC 4345](https://tools.ietf.org/html/rfc4345)
 * RC5 - http://people.csail.mit.edu/rivest/Rivest-rc5rev.pdf
-* RIPEMD - [ISO/IEC 10118-3](http://webstore.ansi.org/RecordDetail.aspx?sku=ISO%2FIEC%2010118-3:2004)
+* RIPEMD - [ISO/IEC 10118-3](https://webstore.ansi.org/RecordDetail.aspx?sku=ISO%2FIEC%2010118-3:2004)
 
 On how to get the ERN approval, you can reference the article: [How to legally
 submit an app to Apple’s App Store when it uses encryption (or how to obtain an
